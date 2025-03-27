@@ -32,7 +32,7 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt update
-          sudo apt install libpipewire-0.3-dev
+          sudo apt install libxkbcommon-dev libpipewire-0.3-dev
       - name: Install cargo-binstall
         uses: cargo-bins/cargo-binstall@v1.12.0
       - name: Install packaging plugins

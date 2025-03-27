@@ -1,8 +1,10 @@
 # Cosmic Privacy Indicator
 
 Privacy indicator for the COSMIC Desktop.
-Detects Microphone and Camera usage, as well as screen sharing and screen recording.
-It is assumed that you are using PipeWire as your media processing server.
+
+This applet detects Microphone and Camera usage, as well as Screen Sharing/Recording.
+
+PipeWire is required for this applet to works.
 
 ![screenshot of the applet](./res/screenshot.png)
 
