@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>dev.DBrox.CosmicPrivacyIndicator</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-only</project_license>
+  <project_group>COSMIC</project_group>
+  <developer_name>D-Brox</developer_name>
+  <update_contact>davidfbg00@gmail.com</update_contact>
+  <url type="homepage">https://github.com/D-Brox/cosmic-ext-applet-privacy-indicator</url>
+  <url type="bugtracker">https://github.com/D-Brox/cosmic-ext-applet-privacy-indicator/issues</url>
+  <name>Privacy Indicator</name>
+  <summary>Privacy applet for indicating when the microphone or camera are being used</summary>
+  <description>
+    <p>Privacy applet for indicating when the microphone or camera are being used</p>
+  </description>
+  <launchable type="desktop-id">dev.DBrox.CosmicPrivacyIndicator.desktop</launchable>
+  <icon type="stock" height="256" width="256">preferences-system-privacy-symbolic</icon>
+  <screenshots>
+  </screenshots>
+  <categories>
+  </categories>
+  <provides>
+    <id>dev.DBrox.CosmicPrivacyIndicator</id>
+    <mimetypes>
+      <mimetype>text/plain</mimetype>
+    </mimetypes>
+    <binaries>
+      <binary>cosmic-ext-applet-privacy-indicator</binary>
+    </binaries>
+  </provides>
+</component>

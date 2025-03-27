@@ -1,0 +1,13 @@
+[Desktop Entry]
+Name=Privacy Indicator
+Exec=cosmic-ext-applet-privacy-indicator %F
+Terminal=false
+Type=Application
+StartupNotify=true
+Icon=preferences-system-privacy-symbolic
+Categories=COSMIC;Utility;
+Keywords=Folder;Manager;
+MimeType=inode/directory;
+NoDisplay=true
+X-CosmicApplet=true
+X-CosmicHoverPopup=Auto

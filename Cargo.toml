@@ -1,0 +1,46 @@
+[package]
+name = "cosmic-ext-applet-privacy-indicator"
+version = "0.1.0"
+edition = "2021"
+authors = ["D-Brox <davidfbg00@gmail.com>"]
+license = "GPL-3.0-only"
+description = "Privacy indicator for the COSMIC Desktop"
+
+[dependencies]
+glob = "0.3.2"
+
+i18n-embed-fl = "0.9.1"
+lazy-regex = "3.4.1"
+open = "5.3.0"
+pipewire = "0.8.0"
+rust-embed = "8.5.0"
+
+
+[dependencies.i18n-embed]
+version = "0.15"
+features = ["fluent-system", "desktop-requester"]
+
+[dependencies.libcosmic]
+git = "https://github.com/pop-os/libcosmic.git"
+default-features = false
+features = ["applet", "tokio", "wayland"]
+
+# # Uncomment to test a locally-cloned libcosmic
+# [patch.'https://github.com/pop-os/libcosmic']
+# libcosmic = { path = "../libcosmic" }
+
+[package.metadata.deb]
+license-file = "LICENSE"
+assets = [
+    ["target/release/cosmic-ext-applet-privacy-indicator", "usr/bin/", "755"],
+    ["res/dev.DBrox.CosmicPrivacyIndicator.desktop", "usr/share/applications/", "644"],
+    ["res/dev.DBrox.CosmicPrivacyIndicator.metainfo.xml", "usr/share/metainfo/", "644"],
+]
+
+[package.metadata.generate-rpm]
+assets = [
+    { source = "target/release/cosmic-ext-applet-privacy-indicator", dest = "/usr/bin/", mode = "755" },
+    { source = "LICENSE", dest = "/usr/share/doc/cosmic-ext-applet-privacy-indicator/LICENSE", doc = true, mode = "644" },
+    { source = "res/*.desktop", dest = "/usr/share/applications/", mode = "644" },
+]
+
