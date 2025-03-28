@@ -5,6 +5,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use cosmic::app::{Core, Task};
+use cosmic::cosmic_theme::palette::WithAlpha;
 use cosmic::iced::{stream, Background, Border, Subscription};
 use cosmic::iced_widget::svg::Style as SvgStyle;
 use cosmic::theme::Theme;
@@ -91,7 +92,7 @@ impl Application for PrivacyIndicator {
         }
 
         let icon_style = Rc::new(|theme: &Theme| SvgStyle {
-            color: Some(theme.cosmic().accent_text_color().into()),
+            color: Some(theme.cosmic().button_color().into()),
         });
         let indicator = |name: &str| {
             icon(icon::from_name(name).into())
@@ -112,7 +113,9 @@ impl Application for PrivacyIndicator {
         let container_style = |theme: &Theme| {
             let cosmic = theme.cosmic();
             ContainerStyle {
-                background: Some(Background::Color(cosmic.primary.base.into())),
+                background: Some(Background::Color(
+                    cosmic.primary.base.with_alpha(0.5).into(),
+                )),
                 border: Border {
                     radius: cosmic.corner_radii.radius_xl.into(),
                     ..Default::default()
