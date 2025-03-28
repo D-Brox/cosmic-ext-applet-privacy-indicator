@@ -21,6 +21,7 @@ struct Shared {
     pub microphone: bool,
     pub screenshare: bool,
     pub camera: bool,
+    pub blink_record_icon: bool,
 }
 
 #[derive(Default)]
@@ -75,14 +76,22 @@ impl Application for PrivacyIndicator {
             microphone,
             screenshare,
             camera,
+            blink_record_icon,
         } = self.shared;
 
         if screenshare || microphone || camera {
+            let record_icon_color = Rc::new(move |theme: &Theme| {
+                let color = if blink_record_icon {
+                    theme.cosmic().button_color().into()
+                } else {
+                    theme.cosmic().destructive_text_color().into()
+                };
+                SvgStyle { color: Some(color) }
+            });
+
             shared.push(
                 icon(icon::from_name("media-record-symbolic").into())
-                    .class(Svg::Custom(Rc::new(|theme: &Theme| SvgStyle {
-                        color: Some(theme.cosmic().destructive_text_color().into()),
-                    })))
+                    .class(Svg::Custom(record_icon_color))
                     .size(size.0)
                     .into(),
             );
@@ -138,11 +147,10 @@ impl Application for PrivacyIndicator {
     fn update(&mut self, message: Self::Message) -> Task<Self::Message> {
         match message {
             Message::Tick => {
-                self.shared = Shared {
-                    microphone: !self.microphones.is_empty(),
-                    screenshare: !self.screenshares.is_empty(),
-                    camera: is_camera_shared(),
-                };
+                self.shared.blink_record_icon = !self.shared.blink_record_icon;
+                self.shared.microphone = !self.microphones.is_empty();
+                self.shared.screenshare = !self.screenshares.is_empty();
+                self.shared.camera = is_camera_shared();
             }
             Message::ScreenShareAdd(id) => {
                 self.screenshares.insert(id);
@@ -160,7 +168,7 @@ impl Application for PrivacyIndicator {
 
     fn subscription(&self) -> Subscription<Self::Message> {
         struct Pipewire;
-        let tick = cosmic::iced::time::every(Duration::from_millis(2000)).map(|_| Message::Tick);
+        let tick = cosmic::iced::time::every(Duration::from_millis(1000)).map(|_| Message::Tick);
         let shares = Subscription::run_with_id(
             std::any::TypeId::of::<Pipewire>(),
             stream::channel(100, move |output| async move {
