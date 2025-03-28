@@ -47,15 +47,18 @@ jobs:
           just build-deb
           just build-rpm
 
+          NAME="cosmic-ext-applet-privacy-indicator"
           ARCH=`uname -m`
-          TARGET_DIR=`pwd`/target
 
-          cp $TARGET_DIR/release/cosmic-ext-applet-privacy-indicator ./cosmic-ext-applet-privacy-indicator-$ARCH
-          strip -s ./cosmic-ext-applet-privacy-indicator-$ARCH
-          cp $TARGET_DIR/debian/*.deb .
-          cp $TARGET_DIR/generate-rpm/*.rpm .
+          mkdir ./$NAME
+          cp ./target/release/$NAME ./res/*.desktop ./res/*.metainfo.xml ./res/install.sh  ./$NAME/
+          strip -s ./$NAME/$NAME
+          tar -czvf $NAME-$ARCH.tar.gz $NAME
+
+          cp ./target/debian/*.deb ./
+          cp ./target/generate-rpm/*.rpm ./
           
-          echo $ARCH=./*-$ARCH >> $GITHUB_OUTPUT
+          echo $ARCH=./*.tar.gz >> $GITHUB_OUTPUT
           echo $ARCH-deb=./*.deb >> $GITHUB_OUTPUT
           echo $ARCH-rpm=./*.rpm >> $GITHUB_OUTPUT
       - name: Publish artifacts and release

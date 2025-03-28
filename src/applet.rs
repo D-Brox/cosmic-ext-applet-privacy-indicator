@@ -5,11 +5,13 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use cosmic::app::{Core, Task};
-use cosmic::cosmic_theme::Layer;
-use cosmic::iced::{stream, Alignment, Length, Subscription};
-use cosmic::theme::Container;
+use cosmic::iced::{stream, Background, Border, Subscription};
+use cosmic::iced_widget::svg::Style as SvgStyle;
+use cosmic::theme::Theme;
+use cosmic::theme::{Container, Svg};
+use cosmic::widget::container::Style as ContainerStyle;
 use cosmic::widget::{icon, layer_container, Column, Row};
-use cosmic::{theme, Application, Apply, Element};
+use cosmic::{Application, Apply, Element};
 use glob::glob;
 use pipewire::context::Context;
 use pipewire::main_loop::MainLoop;
@@ -78,11 +80,9 @@ impl Application for PrivacyIndicator {
         if screenshare || microphone || camera {
             shared.push(
                 icon(icon::from_name("media-record-symbolic").into())
-                    .class(theme::Svg::Custom(Rc::new(
-                        |theme: &cosmic::theme::Theme| cosmic::iced_widget::svg::Style {
-                            color: Some(theme.cosmic().palette.accent_red.into()),
-                        },
-                    )))
+                    .class(Svg::Custom(Rc::new(|theme: &Theme| SvgStyle {
+                        color: Some(theme.cosmic().destructive_text_color().into()),
+                    })))
                     .size(size.0)
                     .into(),
             );
@@ -90,14 +90,12 @@ impl Application for PrivacyIndicator {
             return "".into();
         }
 
-        let style = Rc::new(
-            |theme: &cosmic::theme::Theme| cosmic::iced_widget::svg::Style {
-                color: Some(theme.cosmic().accent_color().into()),
-            },
-        );
+        let icon_style = Rc::new(|theme: &Theme| SvgStyle {
+            color: Some(theme.cosmic().accent_text_color().into()),
+        });
         let indicator = |name: &str| {
             icon(icon::from_name(name).into())
-                .class(theme::Svg::Custom(style.clone()))
+                .class(Svg::Custom(icon_style.clone()))
                 .size(size.0)
         };
 
@@ -111,31 +109,30 @@ impl Application for PrivacyIndicator {
             shared.push(indicator("accessories-screenshot-symbolic").into());
         }
 
+        let container_style = |theme: &Theme| {
+            let cosmic = theme.cosmic();
+            ContainerStyle {
+                background: Some(Background::Color(cosmic.primary.base.into())),
+                border: Border {
+                    radius: cosmic.corner_radii.radius_xl.into(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }
+        };
         let container = if horizontal {
             Row::with_children(shared)
                 .spacing(pad)
-                .align_y(Alignment::Center)
                 .apply(layer_container)
-                .height(Length::Fixed((size.0 + pad).into()))
         } else {
             Column::with_children(shared)
                 .spacing(pad)
-                .align_x(Alignment::Center)
                 .apply(layer_container)
-                .width(Length::Fixed((size.0 + pad).into()))
-        };
+        }
+        .padding(pad)
+        .class(Container::Custom(Box::new(container_style)));
 
-        self.core
-            .applet
-            .autosize_window(
-                container
-                    .padding(pad / 2)
-                    .align_x(Alignment::Center)
-                    .align_y(Alignment::Center)
-                    .class(Container::Tooltip)
-                    .layer(Layer::Primary),
-            )
-            .into()
+        self.core.applet.autosize_window(container).into()
     }
 
     fn update(&mut self, message: Self::Message) -> Task<Self::Message> {
@@ -234,7 +231,7 @@ impl Application for PrivacyIndicator {
 }
 
 fn is_camera_shared() -> bool {
-    glob("/proc/[0-9]*/fd/*")
+    glob("/proc/[0-9]*/fd/[0-9]*")
         .unwrap()
         .filter_map(Result::ok)
         .any(|path| {

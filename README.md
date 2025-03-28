@@ -4,11 +4,15 @@ Privacy indicator for the COSMIC Desktop.
 
 This applet detects Microphone and Camera usage, as well as Screen Sharing/Recording.
 
-PipeWire is required for this applet to works.
+PipeWire is required for this applet to work.
 
 ![screenshot of the applet](./res/screenshot.png)
 
 ## Installation 
+
+You can just grab the `.deb`, `.rpm` or tarball from the [releases](https://github.com/D-Brox/cosmic-ext-applet-privacy-indicator/releases/latest) page
+
+## Building from source
 
 Clone the repository:
 
@@ -16,6 +20,11 @@ Clone the repository:
 git clone https://github.com/D-Brox/cosmic-ext-applet-privacy-indicator cosmic-ext-applet-privacy-indicator
 cd cosmic-ext-applet-privacy-indicator
 ```
+
+Install the build dependencies (or equivalent packages in non debian-based distros):
+
+- libxkbcommon-dev
+- libpipewire-0.3-dev 
 
 Build and install the project:
 
