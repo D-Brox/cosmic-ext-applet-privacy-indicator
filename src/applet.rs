@@ -114,7 +114,7 @@ impl Application for PrivacyIndicator {
             let cosmic = theme.cosmic();
             ContainerStyle {
                 background: Some(Background::Color(
-                    cosmic.primary.base.with_alpha(0.3).into(),
+                    cosmic.primary.base.with_alpha(0.5).into(),
                 )),
                 border: Border {
                     radius: cosmic.corner_radii.radius_xl.into(),
