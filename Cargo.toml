@@ -1,12 +1,13 @@
 [package]
 name = "cosmic-ext-applet-privacy-indicator"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 authors = ["D-Brox <davidfbg00@gmail.com>"]
 license = "GPL-3.0-only"
 description = "Privacy indicator for the COSMIC Desktop"
 
 [dependencies]
+cosmic-time = { git="https://github.com/D-Brox/cosmic-time.git", features = ["once_cell"] }
 glob = "0.3.2"
 pipewire = "0.8.0"
 
@@ -26,7 +27,7 @@ assets = [
     ["res/dev.DBrox.CosmicPrivacyIndicator.desktop", "usr/share/applications/", "644"],
     ["res/dev.DBrox.CosmicPrivacyIndicator.metainfo.xml", "usr/share/metainfo/", "644"],
 ]
-depends = ["libpipewire-0.3-0","libxkbcommon0","libc6"]
+depends = ["libpipewire-0.3-0", "libxkbcommon0", "libc6"]
 
 [package.metadata.generate-rpm]
 assets = [
@@ -39,4 +40,3 @@ assets = [
 glibc = "*"
 libxkbcommon = "*"
 pipewire-libs = "*"
-

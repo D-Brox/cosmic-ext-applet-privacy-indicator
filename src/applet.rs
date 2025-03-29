@@ -2,20 +2,23 @@
 
 use std::collections::HashSet;
 use std::rc::Rc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use cosmic::app::{Core, Task};
 use cosmic::cosmic_theme::palette::WithAlpha;
 use cosmic::iced::{stream, Background, Border, Subscription};
-use cosmic::iced_widget::svg::Style as SvgStyle;
-use cosmic::theme::Theme;
-use cosmic::theme::{Container, Svg};
-use cosmic::widget::container::Style as ContainerStyle;
+use cosmic::theme::{Container, Svg, Theme};
+use cosmic::widget::icon::Named;
+use cosmic::widget::{container::Style as ContainerStyle, svg::Style as SvgStyle};
 use cosmic::widget::{icon, layer_container, Column, Row};
 use cosmic::{Application, Apply, Element};
+use cosmic_time::{anim, chain, once_cell::sync::Lazy, Timeline};
+
 use glob::glob;
 use pipewire::context::Context;
 use pipewire::main_loop::MainLoop;
+
+static REC_ICON: Lazy<crate::rec_icon::Id> = Lazy::new(crate::rec_icon::Id::unique);
 
 #[derive(Default)]
 struct Shared {
@@ -27,6 +30,7 @@ struct Shared {
 #[derive(Default)]
 pub struct PrivacyIndicator {
     core: Core,
+    timeline: Timeline,
     shared: Shared,
     microphones: HashSet<u32>,
     screenshares: HashSet<u32>,
@@ -35,6 +39,7 @@ pub struct PrivacyIndicator {
 #[derive(Debug, Clone)]
 pub enum Message {
     Tick,
+    RecTick(Instant),
     ScreenShareAdd(u32),
     MicrophoneAdd(u32),
     PipeWireNodeRemove(u32),
@@ -58,8 +63,12 @@ impl Application for PrivacyIndicator {
     }
 
     fn init(core: Core, _flags: Self::Flags) -> (Self, Task<Self::Message>) {
+        let mut timeline = Timeline::new();
+        timeline.set_chain(chain![REC_ICON]).start();
+
         let app = PrivacyIndicator {
             core,
+            timeline,
             ..Default::default()
         };
 
@@ -79,14 +88,7 @@ impl Application for PrivacyIndicator {
         } = self.shared;
 
         if screenshare || microphone || camera {
-            shared.push(
-                icon(icon::from_name("media-record-symbolic").into())
-                    .class(Svg::Custom(Rc::new(|theme: &Theme| SvgStyle {
-                        color: Some(theme.cosmic().destructive_text_color().into()),
-                    })))
-                    .size(size.0)
-                    .into(),
-            );
+            shared.push(anim![REC_ICON, &self.timeline, size.0].into());
         } else {
             return "".into();
         }
@@ -157,13 +159,13 @@ impl Application for PrivacyIndicator {
                 self.screenshares.remove(&id);
                 self.microphones.remove(&id);
             }
+            Message::RecTick(now) => self.timeline.now(now),
         };
         Task::none()
     }
 
     fn subscription(&self) -> Subscription<Self::Message> {
         struct Pipewire;
-        let tick = cosmic::iced::time::every(Duration::from_millis(2000)).map(|_| Message::Tick);
         let shares = Subscription::run_with_id(
             std::any::TypeId::of::<Pipewire>(),
             stream::channel(100, move |output| async move {
@@ -195,7 +197,7 @@ impl Application for PrivacyIndicator {
                                                     .try_send(Message::ScreenShareAdd(global.id))
                                                     .is_err()
                                                 {
-                                                    eprintln!("failed to send screen");
+                                                    eprintln!("Failed to send ScreenCast share event");
                                                 }
                                             }
                                             "Stream/Input/Audio" => {
@@ -205,7 +207,9 @@ impl Application for PrivacyIndicator {
                                                     .try_send(Message::MicrophoneAdd(global.id))
                                                     .is_err()
                                                 {
-                                                    eprintln!("failed to send mic");
+                                                    eprintln!(
+                                                        "Failed to send Microphone share event"
+                                                    );
                                                 }
                                             }
                                             _ => (),
@@ -216,7 +220,7 @@ impl Application for PrivacyIndicator {
                         .global_remove(move |id| {
                             let mut output = output_remove.clone();
                             while output.try_send(Message::PipeWireNodeRemove(id)).is_err() {
-                                eprintln!("failed to send remove");
+                                eprintln!("Failed to send unshare event");
                             }
                         })
                         .register();
@@ -224,8 +228,11 @@ impl Application for PrivacyIndicator {
                 });
             }),
         );
+        // Weirdly enough, self.timeline.as_subscription() is too resource heavy, even comparing at 200Hz
+        let timeline = cosmic::iced::time::every(Duration::from_millis(20)).map(Message::RecTick); // 50Hz
+        let tick = cosmic::iced::time::every(Duration::from_millis(2000)).map(|_| Message::Tick);
 
-        Subscription::batch([tick, shares])
+        Subscription::batch([shares, timeline, tick])
     }
 
     fn style(&self) -> Option<cosmic::iced_runtime::Appearance> {

@@ -1058,8 +1058,9 @@ dependencies = [
 
 [[package]]
 name = "cosmic-ext-applet-privacy-indicator"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
+ "cosmic-time",
  "glob",
  "libcosmic",
  "pipewire",
@@ -1144,6 +1145,16 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.12",
+]
+
+[[package]]
+name = "cosmic-time"
+version = "0.4.0"
+source = "git+https://github.com/D-Brox/cosmic-time.git#2c3917409e69d2b5819f7e0b11d2593c6fa9313a"
+dependencies = [
+ "float-cmp",
+ "libcosmic",
+ "once_cell",
 ]
 
 [[package]]
@@ -1607,6 +1618,9 @@ name = "float-cmp"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "98de4bbd547a563b716d8dfa9aad1cb19bfab00f4fa09a6a4ed21dbcf44ce9c4"
+dependencies = [
+ "num-traits",
+]
 
 [[package]]
 name = "float_next_after"
