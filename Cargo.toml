@@ -16,6 +16,10 @@ git = "https://github.com/pop-os/libcosmic.git"
 default-features = false
 features = ["applet", "tokio", "wayland"]
 
+
+[patch."https://github.com/smithay/client-toolkit.git"]
+sctk = { package = "smithay-client-toolkit", version = "=0.19.2" }
+
 # # Uncomment to test a locally-cloned libcosmic
 # [patch.'https://github.com/pop-os/libcosmic']
 # libcosmic = { path = "../libcosmic" }
