@@ -6,16 +6,48 @@ authors = ["D-Brox <davidfbg00@gmail.com>"]
 license = "GPL-3.0-only"
 description = "Privacy indicator for the COSMIC Desktop"
 
+[package.metadata.deb]
+license-file = "LICENSE"
+assets = [
+  [
+    "target/release/cosmic-ext-applet-privacy-indicator",
+    "usr/bin/",
+    "755",
+  ],
+  [
+    "res/dev.DBrox.CosmicPrivacyIndicator.desktop",
+    "usr/share/applications/",
+    "644",
+  ],
+  [
+    "res/dev.DBrox.CosmicPrivacyIndicator.metainfo.xml",
+    "usr/share/metainfo/",
+    "644",
+  ],
+]
+depends = ["libpipewire-0.3-0", "libxkbcommon0", "libc6"]
+
+[package.metadata.generate-rpm]
+assets = [
+  { source = "target/release/cosmic-ext-applet-privacy-indicator", dest = "/usr/bin/", mode = "755" },
+  { source = "LICENSE", dest = "/usr/share/doc/cosmic-ext-applet-privacy-indicator/LICENSE", doc = true, mode = "644" },
+  { source = "res/*.desktop", dest = "/usr/share/applications/", mode = "644" },
+]
+
+[package.metadata.generate-rpm.requires]
+glibc = "*"
+libxkbcommon = "*"
+pipewire-libs = "*"
+
 [dependencies]
-cosmic-time = { git="https://github.com/D-Brox/cosmic-time.git", features = ["once_cell"] }
-glob = "0.3.2"
-pipewire = "0.8.0"
+cosmic-time = { git = "https://github.com/pop-os/cosmic-time.git" }
+glob = "0.3.3"
+pipewire = "0.9.2"
 
 [dependencies.libcosmic]
 git = "https://github.com/pop-os/libcosmic.git"
 default-features = false
 features = ["applet", "tokio", "wayland"]
-
 
 [patch."https://github.com/smithay/client-toolkit.git"]
 sctk = { package = "smithay-client-toolkit", version = "=0.19.2" }
@@ -23,24 +55,3 @@ sctk = { package = "smithay-client-toolkit", version = "=0.19.2" }
 # # Uncomment to test a locally-cloned libcosmic
 # [patch.'https://github.com/pop-os/libcosmic']
 # libcosmic = { path = "../libcosmic" }
-
-[package.metadata.deb]
-license-file = "LICENSE"
-assets = [
-    ["target/release/cosmic-ext-applet-privacy-indicator", "usr/bin/", "755"],
-    ["res/dev.DBrox.CosmicPrivacyIndicator.desktop", "usr/share/applications/", "644"],
-    ["res/dev.DBrox.CosmicPrivacyIndicator.metainfo.xml", "usr/share/metainfo/", "644"],
-]
-depends = ["libpipewire-0.3-0", "libxkbcommon0", "libc6"]
-
-[package.metadata.generate-rpm]
-assets = [
-    { source = "target/release/cosmic-ext-applet-privacy-indicator", dest = "/usr/bin/", mode = "755" },
-    { source = "LICENSE", dest = "/usr/share/doc/cosmic-ext-applet-privacy-indicator/LICENSE", doc = true, mode = "644" },
-    { source = "res/*.desktop", dest = "/usr/share/applications/", mode = "644" },
-]
-
-[package.metadata.generate-rpm.requires]
-glibc = "*"
-libxkbcommon = "*"
-pipewire-libs = "*"

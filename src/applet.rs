@@ -1,24 +1,28 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
-use std::collections::HashSet;
-use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::{
+    collections::HashSet,
+    rc::Rc,
+    sync::LazyLock,
+    time::{Duration, Instant},
+};
 
-use cosmic::app::{Core, Task};
-use cosmic::cosmic_theme::palette::WithAlpha;
-use cosmic::iced::{stream, Background, Border, Subscription};
-use cosmic::theme::{Container, Svg, Theme};
-use cosmic::widget::icon::Named;
-use cosmic::widget::{container::Style as ContainerStyle, svg::Style as SvgStyle};
-use cosmic::widget::{icon, layer_container, Column, Row};
-use cosmic::{Application, Apply, Element};
-use cosmic_time::{anim, chain, once_cell::sync::Lazy, Timeline};
+use cosmic::{
+    app::{Core, Task},
+    cosmic_theme::palette::WithAlpha,
+    iced::{core::layout::Limits, stream::channel, Background, Border, Subscription},
+    theme::{Container, Svg, Theme},
+    widget::{
+        container::Style as CtnStyle, icon, layer_container, svg::Style as SvgStyle, Column, Row,
+    },
+    Application, Apply, Element,
+};
+use cosmic_time::{anim, chain, Timeline};
 
 use glob::glob;
-use pipewire::context::Context;
-use pipewire::main_loop::MainLoop;
+use pipewire::{context::ContextRc, main_loop::MainLoopRc};
 
-static REC_ICON: Lazy<crate::rec_icon::Id> = Lazy::new(crate::rec_icon::Id::unique);
+static REC_ICON: LazyLock<crate::rec_icon::Id> = LazyLock::new(crate::rec_icon::Id::unique);
 
 #[derive(Default)]
 struct Shared {
@@ -75,7 +79,7 @@ impl Application for PrivacyIndicator {
         (app, Task::none())
     }
 
-    fn view(&self) -> Element<Self::Message> {
+    fn view(&'_ self) -> Element<'_, Self::Message> {
         let horizontal = self.core.applet.is_horizontal();
         let size = self.core.applet.suggested_size(true);
         let pad = self.core.applet.suggested_padding(true);
@@ -90,7 +94,12 @@ impl Application for PrivacyIndicator {
         if screenshare || microphone || camera {
             shared.push(anim![REC_ICON, &self.timeline, size.0].into());
         } else {
-            return "".into();
+            return self
+                .core
+                .applet
+                .autosize_window("")
+                .limits(Limits::NONE)
+                .into();
         }
 
         let icon_style = Rc::new(|theme: &Theme| SvgStyle {
@@ -114,7 +123,7 @@ impl Application for PrivacyIndicator {
 
         let container_style = |theme: &Theme| {
             let cosmic = theme.cosmic();
-            ContainerStyle {
+            CtnStyle {
                 background: Some(Background::Color(
                     cosmic.primary.base.with_alpha(0.5).into(),
                 )),
@@ -127,17 +136,21 @@ impl Application for PrivacyIndicator {
         };
         let container = if horizontal {
             Row::with_children(shared)
-                .spacing(pad)
+                .spacing(pad.0)
                 .apply(layer_container)
         } else {
             Column::with_children(shared)
-                .spacing(pad)
+                .spacing(pad.1)
                 .apply(layer_container)
         }
-        .padding(pad)
+        .padding(pad.0.min(pad.1))
         .class(Container::Custom(Box::new(container_style)));
 
-        self.core.applet.autosize_window(container).into()
+        self.core
+            .applet
+            .autosize_window(container)
+            .limits(Limits::NONE)
+            .into()
     }
 
     fn update(&mut self, message: Self::Message) -> Task<Self::Message> {
@@ -160,7 +173,7 @@ impl Application for PrivacyIndicator {
                 self.microphones.remove(&id);
             }
             Message::RecTick(now) => self.timeline.now(now),
-        };
+        }
         Task::none()
     }
 
@@ -168,13 +181,13 @@ impl Application for PrivacyIndicator {
         struct Pipewire;
         let shares = Subscription::run_with_id(
             std::any::TypeId::of::<Pipewire>(),
-            stream::channel(100, move |output| async move {
+            channel(100, move |output| async move {
                 std::thread::spawn(move || {
                     pipewire::init();
                     let main_loop =
-                        MainLoop::new(None).expect("Failed to create PipeWire main loop");
-                    let context =
-                        Context::new(&main_loop).expect("Failed to create PipeWire context");
+                        MainLoopRc::new(None).expect("Failed to create PipeWire main loop");
+                    let context = ContextRc::new(&main_loop, None)
+                        .expect("Failed to create PipeWire context");
                     let core = context
                         .connect(None)
                         .expect("Failed to connect to PipeWire");
@@ -197,7 +210,9 @@ impl Application for PrivacyIndicator {
                                                     .try_send(Message::ScreenShareAdd(global.id))
                                                     .is_err()
                                                 {
-                                                    eprintln!("Failed to send ScreenCast share event");
+                                                    eprintln!(
+                                                        "Failed to send ScreenCast share event"
+                                                    );
                                                 }
                                             }
                                             "Stream/Input/Audio" => {

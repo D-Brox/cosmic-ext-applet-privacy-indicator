@@ -1,20 +1,19 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use std::rc::Rc;
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use cosmic::cosmic_theme::palette::Mix;
-use cosmic::iced_widget::svg::Style as SvgStyle;
 use cosmic::theme::{Svg, Theme};
-use cosmic::widget::Icon;
-use cosmic::widget::Id as CosmicId;
-use cosmic::widget::{icon, icon::Handle};
-use cosmic_time::once_cell::sync::Lazy;
-use cosmic_time::timeline::{self, Interped};
-use cosmic_time::*;
-use cosmic_time::{timeline::Frame, Timeline};
+use cosmic::widget::{icon, icon::Handle, svg::Style as SvgStyle, Icon, Id as CosmicId};
+use cosmic_time::{
+    timeline::{Chain as TimelineChain, Frame, Interped},
+    Ease, MovementType, Quadratic, Repeat, Timeline,
+};
 
-static REC_ICON_HANDLE: Lazy<Handle> = Lazy::new(|| icon::from_name("media-record-symbolic").into());
+static REC_ICON_HANDLE: LazyLock<Handle> =
+    LazyLock::new(|| icon::from_name("media-record-symbolic").into());
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Id(CosmicId);
@@ -32,7 +31,7 @@ impl Id {
         Chain::new(self)
     }
 
-    pub fn as_widget(self, timeline: &Timeline, size: u16) -> Icon {
+    pub fn as_widget(&self, timeline: &Timeline, size: u16) -> Icon {
         RecIcon::as_widget(self, timeline, size)
     }
 }
@@ -64,9 +63,9 @@ impl Chain {
     }
 }
 
-impl From<Chain> for timeline::Chain {
+impl From<Chain> for TimelineChain {
     fn from(chain: Chain) -> Self {
-        timeline::Chain::new(
+        TimelineChain::new(
             chain.id.0,
             Repeat::Forever,
             chain
@@ -100,7 +99,7 @@ impl RecIcon {
         self
     }
 
-    pub fn as_widget(id: Id, timeline: &Timeline, size: u16) -> Icon {
+    pub fn as_widget(id: &Id, timeline: &Timeline, size: u16) -> Icon {
         let value = if let Some(Interped { value, .. }) = timeline.get(&id.0, 0) {
             value
         } else {
