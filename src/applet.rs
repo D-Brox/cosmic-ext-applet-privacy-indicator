@@ -2,6 +2,7 @@
 
 use std::{
     collections::HashSet,
+    fs::{read_dir, read_link},
     rc::Rc,
     sync::LazyLock,
     time::{Duration, Instant},
@@ -18,8 +19,6 @@ use cosmic::{
     Application, Apply, Element,
 };
 use cosmic_time::{anim, chain, Timeline};
-
-use glob::glob;
 use pipewire::{context::ContextRc, main_loop::MainLoopRc};
 
 static REC_ICON: LazyLock<crate::rec_icon::Id> = LazyLock::new(crate::rec_icon::Id::unique);
@@ -256,15 +255,23 @@ impl Application for PrivacyIndicator {
 }
 
 fn is_camera_shared() -> bool {
-    glob("/proc/[0-9]*/fd/[0-9]*")
-        .unwrap()
-        .filter_map(Result::ok)
-        .any(|path| {
-            if let Ok(link) = std::fs::read_link(path) {
-                if link.to_string_lossy().starts_with("/dev/video") {
-                    return true;
-                }
-            }
-            false
-        })
+    read_dir("/proc").is_ok_and(|paths| {
+        paths
+            .flatten()
+            .filter(|pid| {
+                pid.file_name()
+                    .to_string_lossy()
+                    .bytes()
+                    .all(|b| b.is_ascii_digit())
+            })
+            .filter_map(|pid| {
+                read_dir(pid.path().join("fd"))
+                    .ok()
+                    .map(|fds| fds.flatten().map(|p| p.path()))
+            })
+            .flatten()
+            .any(|fd| {
+                read_link(fd).is_ok_and(|link| link.to_string_lossy().starts_with("/dev/video"))
+            })
+    })
 }

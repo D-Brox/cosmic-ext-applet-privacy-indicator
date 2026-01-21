@@ -41,7 +41,6 @@ pipewire-libs = "*"
 
 [dependencies]
 cosmic-time = { git = "https://github.com/pop-os/cosmic-time.git" }
-glob = "0.3.3"
 pipewire = "0.9.2"
 
 [dependencies.libcosmic]
