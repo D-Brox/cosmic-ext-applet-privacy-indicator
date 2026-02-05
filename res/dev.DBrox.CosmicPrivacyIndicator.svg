@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no" ?>
+<svg
+    viewBox="0 0 16 16"
+    version="1.1"
+    id="svg4"
+    sodipodi:docname="preferences-system-privacy-symbolic.svg"
+    inkscape:version="1.4.3 (0d15f75042, 2025-12-25)"
+    xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+    xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+    xmlns="http://www.w3.org/2000/svg"
+    xmlns:svg="http://www.w3.org/2000/svg"
+>
+  <defs id="defs4" />
+  <sodipodi:namedview
+        id="namedview4"
+        pagecolor="#505050"
+        bordercolor="#eeeeee"
+        borderopacity="1"
+        inkscape:showpageshadow="0"
+        inkscape:pageopacity="0"
+        inkscape:pagecheckerboard="0"
+        inkscape:deskcolor="#505050"
+        inkscape:zoom="49.5"
+        inkscape:cx="8"
+        inkscape:cy="8"
+        inkscape:window-width="2560"
+        inkscape:window-height="1011"
+        inkscape:window-x="0"
+        inkscape:window-y="0"
+        inkscape:window-maximized="1"
+        inkscape:current-layer="svg4"
+    />
+  <path
+        color="#bebebe"
+        d="M16 16H0V0h16z"
+        fill="gray"
+        fill-opacity=".01"
+        id="path1"
+    />
+  <path
+        color="#000"
+        d="m551.97 488-7 1v10.75l7 4.25 7-4.25V489zm0 2 5 .75v8l-5 3-5-3v-8z"
+        fill="#232323"
+        style="font-feature-settings:normal;font-variant-alternates:normal;font-variant-caps:normal;font-variant-ligatures:normal;font-variant-numeric:normal;font-variant-position:normal;isolation:auto;mix-blend-mode:normal;shape-padding:0;text-decoration-color:#000;text-decoration-line:none;text-decoration-style:solid;text-indent:0;text-orientation:mixed;text-transform:none;white-space:normal"
+        transform="translate(-543.97 -488)"
+        id="path2"
+    />
+  <path
+        d="M8 3a2 2 0 0 0-2 2 2 2 0 0 0 2 2 2 2 0 0 0 2-2 2 2 0 0 0-2-2z"
+        fill="red"
+        id="path3"
+        fill-opacity="1"
+    />
+  <path
+        d="M8 8c-4-.002-4 2-4 2v1h8v-1s0-2.002-4-2z"
+        fill="#232323"
+        id="path4"
+    />
+</svg>

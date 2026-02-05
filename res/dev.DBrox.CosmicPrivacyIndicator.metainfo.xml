@@ -20,7 +20,7 @@
     <p>Privacy applet for indicating when the microphone, camera or screen are being shared</p>
   </description>
   <launchable type="desktop-id">dev.DBrox.CosmicPrivacyIndicator.desktop</launchable>
-  <icon type="stock" height="256" width="256">preferences-system-privacy-symbolic</icon>
+  <icon type="stock">dev.DBrox.CosmicPrivacyIndicator.svg</icon>
   <screenshots>
     <screenshot type="default">
       <image>https://github.com/D-Brox/cosmic-ext-applet-privacy-indicator/raw/master/res/screenshot.png</image>

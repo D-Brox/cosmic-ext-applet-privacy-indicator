@@ -24,6 +24,11 @@ assets = [
     "usr/share/metainfo/",
     "644",
   ],
+  [
+    "res/dev.DBrox.CosmicPrivacyIndicator.svg",
+    "usr/share/icons/hicolor/scalable/apps/",
+    "644",
+  ],
 ]
 depends = ["libpipewire-0.3-0", "libxkbcommon0", "libc6"]
 
@@ -32,6 +37,7 @@ assets = [
   { source = "target/release/cosmic-ext-applet-privacy-indicator", dest = "/usr/bin/", mode = "755" },
   { source = "LICENSE", dest = "/usr/share/doc/cosmic-ext-applet-privacy-indicator/LICENSE", doc = true, mode = "644" },
   { source = "res/*.desktop", dest = "/usr/share/applications/", mode = "644" },
+  { source = "res/*.svg", dest = "/usr/share/icons/scalable/apps/", mode = "644" },
 ]
 
 [package.metadata.generate-rpm.requires]

@@ -16,6 +16,10 @@ metainfo-src := 'res' / metainfo
 metainfo-path := 'share' / 'metainfo' / metainfo
 metainfo-dst := base-dir / metainfo-path
 
+icon := APPID + '.svg'
+icon-src := 'res' / icon
+icon-path := 'icons' / 'hicolor' / 'scalable' / 'apps' / icon
+icon-dst := base-dir / 'share' / icon-path
 
 # Compiles with debug profile
 build-debug *args:
@@ -30,14 +34,14 @@ install:
     install -Dm0755 {{bin-src}} {{bin-dst}}
     install -Dm0644 {{desktop-src}} {{desktop-dst}}
     install -Dm0644 {{metainfo-src}} {{metainfo-dst}}
-
+    install -Dm0644 {{icon-src}} {{icon-dst}}
 
 # Uninstalls globally installed files
 uninstall:
     rm {{bin-dst}}
     rm {{desktop-dst}}
     rm {{metainfo-dst}}
-
+    rm {{icon-dst}}
 
 # Installs files locally
 [no-cd]
@@ -45,12 +49,14 @@ install-local:
     install -Dm0755  ~/.local/bin/{{name}}
     install -Dm0644  ${XDG_DATA_HOME:-~/.local/share}/{{desktop-path}}
     install -Dm0644  ${XDG_DATA_HOME:-~/.local/share}/{{metainfo-path}}
+    install -Dm0644 {{icon-src}} ${XDG_DATA_HOME:-~/.local/share}/{{icon-path}}
 
 # Uninstalls locally installed files
 uninstall-local:
     rm ~/.local/bin/{{name}}
     rm ${XDG_DATA_HOME:-~/.local/share}/{{desktop-path}}
     rm ${XDG_DATA_HOME:-~/.local/share}/{{metainfo-path}}
+    rm ${XDG_DATA_HOME:-~/.local/share}/{{icon-path}}
 
 # Compiles and packages deb with release profile
 build-deb:
