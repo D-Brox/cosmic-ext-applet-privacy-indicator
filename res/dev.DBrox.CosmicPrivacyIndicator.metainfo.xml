@@ -4,28 +4,44 @@
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-only</project_license>
   <project_group>COSMIC</project_group>
+  <developer id="io.github.D-Brox">
+    <name>D-Brox</name>
+  </developer>
   <developer_name>D-Brox</developer_name>
   <update_contact>davidfbg00@gmail.com</update_contact>
   <url type="homepage">https://github.com/D-Brox/cosmic-ext-applet-privacy-indicator</url>
   <url type="bugtracker">https://github.com/D-Brox/cosmic-ext-applet-privacy-indicator/issues</url>
+  <url type="contribute">https://github.com/D-Brox/cosmic-ext-applet-system-monitor</url>
+  <url type="translate">https://github.com/D-Brox/cosmic-ext-applet-system-monitor/tree/master/i18n</url>
+  <content_rating type="oars-1.1" />
   <name>Privacy Indicator</name>
-  <summary>Privacy applet for indicating when the microphone or camera are being used</summary>
+  <summary>Privacy applet for indicating when the microphone, camera or screen are being shared</summary>
   <description>
-    <p>Privacy applet for indicating when the microphone or camera are being used</p>
+    <p>Privacy applet for indicating when the microphone, camera or screen are being shared</p>
   </description>
   <launchable type="desktop-id">dev.DBrox.CosmicPrivacyIndicator.desktop</launchable>
   <icon type="stock" height="256" width="256">preferences-system-privacy-symbolic</icon>
   <screenshots>
+    <screenshot type="default">
+      <image>https://github.com/D-Brox/cosmic-ext-applet-privacy-indicator/raw/master/res/screenshot.png</image>
+      <caption>Indicator with all shares active</caption>
+    </screenshot>
   </screenshots>
   <categories>
+    <category>Utility</category>
   </categories>
   <provides>
     <id>dev.DBrox.CosmicPrivacyIndicator</id>
-    <mimetypes>
-      <mimetype>text/plain</mimetype>
-    </mimetypes>
     <binaries>
       <binary>cosmic-ext-applet-privacy-indicator</binary>
     </binaries>
   </provides>
+  <releases>
+    <release version="0.1.3" date="2026-01-21">
+      <url type="details">https://github.com/D-Brox/cosmic-ext-applet-system-monitor/releases/tag/v0.1.3</url>
+      <description>
+        <p>Fix minimum applet size. Updated dependencies.</p>
+      </description>
+    </release>
+  </releases>
 </component>

@@ -6,3 +6,6 @@ debug/
 target/
 vendor/
 vendor.tar
+.flatpak-builder
+builddir
+repo
