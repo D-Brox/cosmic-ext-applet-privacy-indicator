@@ -1,13 +1,12 @@
 [Desktop Entry]
 Name=Privacy Indicator
-Exec=cosmic-ext-applet-privacy-indicator %F
+Exec=cosmic-ext-applet-privacy-indicator
 Terminal=false
 Type=Application
 StartupNotify=true
 Icon=dev.DBrox.CosmicPrivacyIndicator-symbolic
 Categories=COSMIC;Utility;
-Keywords=Folder;Manager;
-MimeType=inode/directory;
+Keywords=Privacy;Monitor;
 NoDisplay=true
 X-CosmicApplet=true
 X-CosmicHoverPopup=Auto
