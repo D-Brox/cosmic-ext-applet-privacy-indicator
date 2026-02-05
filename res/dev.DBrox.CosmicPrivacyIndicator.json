@@ -1,0 +1,72 @@
+{
+  "id": "dev.DBrox.CosmicPrivacyIndicator",
+  "runtime": "org.freedesktop.Platform",
+  "runtime-version": "25.08",
+  "sdk": "org.freedesktop.Sdk",
+  "sdk-extensions": [
+    "org.freedesktop.Sdk.Extension.rust-stable",
+    "org.freedesktop.Sdk.Extension.llvm21"
+  ],
+  "base": "com.system76.Cosmic.BaseApp",
+  "base-version": "stable",
+  "command": "cosmic-ext-applet-privacy-indicator",
+  "finish-args": [
+    "--socket=pulseaudio",
+    "--socket=wayland",
+    "--socket=fallback-x11",
+    "--share=ipc",
+    "--filesystem=xdg-run/pipewire-0",
+    "--filesystem=xdg-config/cosmic:rw",
+    "--talk-name=com.system76.CosmicSettingsDaemon"
+  ],
+  "build-options": {
+    "append-path": "/usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/llvm21/bin",
+    "prepend-ld-library-path": "/usr/lib/sdk/llvm21/lib",
+    "env": {
+      "CARGO_HOME": "/run/build/cosmic-ext-applet-privacy-indicator/cargo"
+    }
+  },
+  "modules": [
+    {
+      "name": "pipewire",
+      "buildsystem": "meson",
+      "config-opts": [
+        "-Dgstreamer=disabled",
+        "-Dman=disabled",
+        "-Dlibsystemd=disabled",
+        "-Dudev=disabled",
+        "-Dudevrulesdir=disabled",
+        "-Dsession-managers=[]",
+        "-Djack=enabled"
+      ],
+      "sources": [
+        {
+          "type": "git",
+          "url": "https://github.com/pipewire/pipewire.git",
+          "tag": "1.5.85",
+          "commit": "0a27618cd4f43017c8e2aa7b68172e64ba48eb23"
+        }
+      ]
+    },
+    {
+      "name": "cosmic-ext-applet-privacy-indicator",
+      "buildsystem": "simple",
+      "build-commands": [
+        "cargo --offline fetch --manifest-path Cargo.toml --verbose",
+        "cargo --offline build --release --verbose",
+        "install -Dm0755 ./target/release/cosmic-ext-applet-privacy-indicator /app/bin/cosmic-ext-applet-privacy-indicator",
+        "install -Dm0644 ./res/dev.DBrox.CosmicPrivacyIndicator.desktop /app/share/applications/dev.DBrox.CosmicPrivacyIndicator.desktop",
+        "install -Dm0644 ./res/dev.DBrox.CosmicPrivacyIndicator.metainfo.xml /app/share/metainfo/dev.DBrox.CosmicPrivacyIndicator.metainfo.xml",
+        "install -Dm0644 ./res/dev.DBrox.CosmicPrivacyIndicator.svg /app/share/icons/hicolor/scalable/apps/dev.DBrox.CosmicPrivacyIndicator.svg"
+      ],
+      "sources": [
+        {
+          "type": "git",
+          "url": "https://github.com/D-Brox/cosmic-ext-applet-privacy-indicator.git",
+          "commit": "dca60f541964a44235d48ae18806c542c7db6f22"
+        },
+        "generated-sources.json"
+      ]
+    }
+  ]
+}
