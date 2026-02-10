@@ -18,9 +18,7 @@
   <summary>Privacy applet for indicating when the microphone, camera or screen are being shared</summary>
   <description>
     <p>Privacy applet for indicating when the microphone, camera or screen are being shared.</p>
-    <p>The Flatpak version is currently unable to monitor the camera due to the sandboxing restrictions over the procfs.</p>
-    <p>This feature will be implemented in the future using inotify.</p>
-    <p>If you want the full functionality, you can install from the other methods in the repository, however automatic updates are only supported for the Flatpak version.</p>
+    <p>The Flatpak version is unable to detect camera shares from before the applet was launched.</p>
   </description>
   <launchable type="desktop-id">dev.DBrox.CosmicPrivacyIndicator.desktop</launchable>
   <icon type="stock">dev.DBrox.CosmicPrivacyIndicator.svg</icon>
