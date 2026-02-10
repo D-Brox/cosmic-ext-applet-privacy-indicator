@@ -32,7 +32,7 @@
     <category>Utility</category>
   </categories>
   <provides>
-    <id>dev.DBrox.CosmicPrivacyIndicator</id>
+    <id>com.system76.CosmicApplet</id>
     <binary>
       cosmic-ext-applet-privacy-indicator
     </binary>
