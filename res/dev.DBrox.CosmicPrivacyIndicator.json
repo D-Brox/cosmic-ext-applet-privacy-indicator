@@ -15,6 +15,7 @@
     "--socket=wayland",
     "--socket=fallback-x11",
     "--share=ipc",
+    "--device=all",
     "--filesystem=xdg-run/pipewire-0",
     "--filesystem=xdg-config/cosmic:rw",
     "--talk-name=com.system76.CosmicSettingsDaemon"
@@ -63,7 +64,7 @@
         {
           "type": "git",
           "url": "https://github.com/D-Brox/cosmic-ext-applet-privacy-indicator.git",
-          "commit": "dca60f541964a44235d48ae18806c542c7db6f22"
+          "commit": "96b9a81f90dce37416fed8df3c583e3f1bc5f0fa"
         },
         "generated-sources.json"
       ]
