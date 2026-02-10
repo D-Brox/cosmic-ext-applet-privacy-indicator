@@ -1,25 +1,31 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fs::{read_dir, read_link},
+    path::PathBuf,
     rc::Rc,
     sync::LazyLock,
     time::{Duration, Instant},
 };
 
 use cosmic::{
+    Application, Apply, Element,
     app::{Core, Task},
     cosmic_theme::palette::WithAlpha,
-    iced::{core::layout::Limits, stream::channel, Background, Border, Subscription},
+    iced::{Background, Border, Subscription, core::layout::Limits, stream::channel},
     theme::{Container, Svg, Theme},
     widget::{
-        container::Style as CtnStyle, icon, layer_container, svg::Style as SvgStyle, Column, Row,
+        Column, Row, container::Style as CtnStyle, icon, layer_container, svg::Style as SvgStyle,
     },
-    Application, Apply, Element,
 };
-use cosmic_time::{anim, chain, Timeline};
+use cosmic_time::{Timeline, anim, chain};
+
+use bimap::BiHashMap;
+use inotify::{EventMask, Inotify, WatchDescriptor, WatchMask};
 use pipewire::{context::ContextRc, main_loop::MainLoopRc};
+
+use crate::camera::{get_inotify, open_cameras};
 
 static REC_ICON: LazyLock<crate::rec_icon::Id> = LazyLock::new(crate::rec_icon::Id::unique);
 
@@ -37,6 +43,7 @@ pub struct PrivacyIndicator {
     shared: Shared,
     microphones: HashSet<u32>,
     screenshares: HashSet<u32>,
+    cameras: HashMap<PathBuf, (i32, i32)>,
 }
 
 #[derive(Debug, Clone)]
@@ -46,6 +53,10 @@ pub enum Message {
     ScreenShareAdd(u32),
     MicrophoneAdd(u32),
     PipeWireNodeRemove(u32),
+    CameraOpen(PathBuf),
+    CameraClose(PathBuf),
+    CameraPrevious(HashMap<PathBuf, (i32, i32)>),
+    CameraReset(PathBuf),
 }
 
 impl Application for PrivacyIndicator {
@@ -158,8 +169,31 @@ impl Application for PrivacyIndicator {
                 self.shared = Shared {
                     microphone: !self.microphones.is_empty(),
                     screenshare: !self.screenshares.is_empty(),
-                    camera: is_camera_shared(),
+                    camera: self
+                        .cameras
+                        .values()
+                        .fold(0, |acc, (shares, min)| acc + shares - min)
+                        > 0,
                 };
+            }
+            Message::CameraPrevious(cameras) => self.cameras = cameras,
+            Message::CameraOpen(path) => {
+                self.cameras
+                    .entry(path)
+                    .and_modify(|v| v.0 += 1)
+                    .or_insert((1, 0));
+            }
+            Message::CameraClose(path) => {
+                self.cameras
+                    .entry(path)
+                    .and_modify(|v| {
+                        v.0 -= 1;
+                        v.1 = v.1.min(v.0);
+                    })
+                    .or_insert((0, 0));
+            }
+            Message::CameraReset(path) => {
+                self.cameras.remove(&path);
             }
             Message::ScreenShareAdd(id) => {
                 self.screenshares.insert(id);
@@ -177,10 +211,8 @@ impl Application for PrivacyIndicator {
     }
 
     fn subscription(&self) -> Subscription<Self::Message> {
-        struct Pipewire;
-        let shares = Subscription::run_with_id(
-            std::any::TypeId::of::<Pipewire>(),
-            channel(100, move |output| async move {
+        let pw_shares = Subscription::run(|| {
+            channel(100, |output| async {
                 std::thread::spawn(move || {
                     pipewire::init();
                     let main_loop =
@@ -240,38 +272,90 @@ impl Application for PrivacyIndicator {
                         .register();
                     main_loop.run();
                 });
-            }),
-        );
-        // Weirdly enough, self.timeline.as_subscription() is too resource heavy, even comparing at 200Hz
+            })
+        });
+
+        let camera_shares = Subscription::run(|| {
+            channel(100, |mut output| async {
+                std::thread::spawn(move || {
+                    let open_cameras = open_cameras();
+                    while output
+                        .try_send(Message::CameraPrevious(open_cameras.clone()))
+                        .is_err()
+                    {
+                        eprintln!("Failed to send previously open camera event");
+                    }
+                    let (mut inotify, mut wd_path) = get_inotify();
+                    let mut event_buffer = [0; 1024];
+
+                    loop {
+                        for event in inotify
+                            .read_events_blocking(&mut event_buffer)
+                            .expect("Failed to read events")
+                        {
+                            match event.mask {
+                                EventMask::CREATE | EventMask::ATTRIB | EventMask::DELETE_SELF => {
+                                    if event.mask == EventMask::DELETE_SELF
+                                        || event
+                                            .name
+                                            .unwrap_or_default()
+                                            .to_string_lossy()
+                                            .starts_with("video")
+                                    {
+                                        let old_wd_paths = wd_path;
+                                        (inotify, wd_path) = get_inotify();
+                                        let old_paths =
+                                            old_wd_paths.left_values().collect::<HashSet<_>>();
+                                        let new_paths =
+                                            wd_path.left_values().collect::<HashSet<_>>();
+                                        for &path in old_paths.difference(&new_paths) {
+                                            while output
+                                                .try_send(Message::CameraReset(path.clone()))
+                                                .is_err()
+                                            {
+                                                eprintln!("Failed to send camera reset event");
+                                            }
+                                        }
+                                    }
+                                }
+                                EventMask::OPEN => {
+                                    wd_path.get_by_right(&event.wd).inspect(|&path| {
+                                        println!("open {path:?}");
+                                        while output
+                                            .try_send(Message::CameraOpen(path.clone()))
+                                            .is_err()
+                                        {
+                                            eprintln!("Failed to send camera open event");
+                                        }
+                                    });
+                                }
+                                EventMask::CLOSE_WRITE | EventMask::CLOSE_NOWRITE => {
+                                    wd_path.get_by_right(&event.wd).inspect(|&path| {
+                                        println!("close {path:?}");
+                                        while output
+                                            .try_send(Message::CameraClose(path.clone()))
+                                            .is_err()
+                                        {
+                                            eprintln!("Failed to send camera close event");
+                                        }
+                                    });
+                                }
+                                _ => continue,
+                            };
+                        }
+                    }
+                });
+            })
+        });
+
+        // Weirdly enough, self.timeline.as_subscription() is too resource heavy, since it follows the compositors refresh rate
         let timeline = cosmic::iced::time::every(Duration::from_millis(20)).map(Message::RecTick); // 50Hz
         let tick = cosmic::iced::time::every(Duration::from_millis(2000)).map(|_| Message::Tick);
 
-        Subscription::batch([shares, timeline, tick])
+        Subscription::batch([pw_shares, camera_shares, timeline, tick])
     }
 
     fn style(&self) -> Option<cosmic::iced_runtime::Appearance> {
         Some(cosmic::applet::style())
     }
-}
-
-fn is_camera_shared() -> bool {
-    read_dir("/proc").is_ok_and(|paths| {
-        paths
-            .flatten()
-            .filter(|pid| {
-                pid.file_name()
-                    .to_string_lossy()
-                    .bytes()
-                    .all(|b| b.is_ascii_digit())
-            })
-            .filter_map(|pid| {
-                read_dir(pid.path().join("fd"))
-                    .ok()
-                    .map(|fds| fds.flatten().map(|p| p.path()))
-            })
-            .flatten()
-            .any(|fd| {
-                read_link(fd).is_ok_and(|link| link.to_string_lossy().starts_with("/dev/video"))
-            })
-    })
 }

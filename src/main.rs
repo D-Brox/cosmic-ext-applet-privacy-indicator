@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 mod applet;
+mod camera;
 mod rec_icon;
 
 fn main() -> cosmic::iced::Result {
