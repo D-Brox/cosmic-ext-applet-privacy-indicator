@@ -1,5 +1,6 @@
 [Desktop Entry]
 Name=Privacy Indicator
+Name[cs]=Indikátor soukromí
 Exec=cosmic-ext-applet-privacy-indicator
 Terminal=false
 Type=Application
@@ -7,6 +8,7 @@ StartupNotify=true
 Icon=dev.DBrox.CosmicPrivacyIndicator-symbolic
 Categories=COSMIC
 Keywords=Privacy;Monitor;
+Keywords[cs]=Soukromí;Sledování;
 NoDisplay=true
 X-CosmicApplet=true
 X-CosmicHoverPopup=Auto
