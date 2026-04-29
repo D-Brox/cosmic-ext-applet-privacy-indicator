@@ -9,3 +9,4 @@ vendor.tar
 .flatpak-builder
 builddir
 repo
+.idea

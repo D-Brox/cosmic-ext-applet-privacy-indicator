@@ -1,11 +1,17 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs::{read_dir, read_link},
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 use bimap::BiHashMap;
 use inotify::{Inotify, WatchDescriptor, WatchMask};
+
+#[derive(Debug, Clone, Default)]
+pub struct AppInfo {
+    pub name: String,
+    pub pid: u32,
+}
 
 pub fn open_cameras() -> HashMap<PathBuf, (i32, i32)> {
     if std::path::Path::new("/.flatpak-info").exists() {
@@ -45,6 +51,41 @@ pub fn open_cameras() -> HashMap<PathBuf, (i32, i32)> {
             Ok(res)
         })
         .unwrap_or_default()
+}
+
+/// Scans /proc to find all processes currently holding a file descriptor open on `device`.
+pub fn procs_using_camera(device: &Path) -> Vec<AppInfo> {
+    if std::path::Path::new("/.flatpak-info").exists() {
+        return vec![];
+    }
+    let mut seen_pids = HashSet::new();
+    read_dir("/proc")
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| {
+            e.file_name()
+                .to_string_lossy()
+                .bytes()
+                .all(|b| b.is_ascii_digit())
+        })
+        .filter_map(|pid_entry| {
+            let pid: u32 = pid_entry.file_name().to_string_lossy().parse().ok()?;
+            let uses_device = read_dir(pid_entry.path().join("fd"))
+                .ok()?
+                .flatten()
+                .any(|fd| read_link(fd.path()).ok().as_deref() == Some(device));
+            if !uses_device {
+                return None;
+            }
+            let name = std::fs::read_to_string(pid_entry.path().join("comm"))
+                .ok()?
+                .trim()
+                .to_string();
+            Some(AppInfo { name, pid })
+        })
+        .filter(|info| seen_pids.insert(info.pid))
+        .collect()
 }
 
 pub fn get_inotify() -> (Inotify, BiHashMap<PathBuf, WatchDescriptor>) {

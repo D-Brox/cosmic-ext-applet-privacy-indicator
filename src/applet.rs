@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use std::{
-    collections::{HashMap, HashSet},
-    fs::{read_dir, read_link},
+    collections::HashMap,
     path::PathBuf,
     rc::Rc,
     sync::LazyLock,
@@ -12,28 +11,40 @@ use std::{
 use cosmic::{
     Application, Apply, Element,
     app::{Core, Task},
+    applet::padded_control,
     cosmic_theme::palette::WithAlpha,
-    iced::{Background, Border, Subscription, core::layout::Limits, stream::channel},
+    iced::{
+        Alignment, Background, Border, Length, Subscription,
+        core::layout::Limits,
+        stream::channel,
+        window,
+    },
     theme::{Container, Svg, Theme},
     widget::{
-        Column, Row, container::Style as CtnStyle, icon, layer_container, svg::Style as SvgStyle,
+        Column, Row,
+        container::Style as CtnStyle,
+        divider,
+        icon,
+        layer_container,
+        mouse_area,
+        svg::Style as SvgStyle,
+        text,
     },
 };
 use cosmic_time::{Timeline, anim, chain};
 
-use bimap::BiHashMap;
-use inotify::{EventMask, Inotify, WatchDescriptor, WatchMask};
+use inotify::EventMask;
 use pipewire::{context::ContextRc, main_loop::MainLoopRc};
 
-use crate::camera::{get_inotify, open_cameras};
+use crate::camera::{AppInfo, get_inotify, open_cameras, procs_using_camera};
 
 static REC_ICON: LazyLock<crate::rec_icon::Id> = LazyLock::new(crate::rec_icon::Id::unique);
 
 #[derive(Default)]
 struct Shared {
-    pub microphone: bool,
-    pub screenshare: bool,
-    pub camera: bool,
+    microphone: Vec<AppInfo>,
+    screenshare: Vec<AppInfo>,
+    camera: Vec<AppInfo>,
 }
 
 #[derive(Default)]
@@ -41,22 +52,44 @@ pub struct PrivacyIndicator {
     core: Core,
     timeline: Timeline,
     shared: Shared,
-    microphones: HashSet<u32>,
-    screenshares: HashSet<u32>,
+    microphones: HashMap<u32, AppInfo>,
+    screenshares: HashMap<u32, AppInfo>,
     cameras: HashMap<PathBuf, (i32, i32)>,
+    camera_apps: HashMap<PathBuf, Vec<AppInfo>>,
+    popup: Option<window::Id>,
 }
 
 #[derive(Debug, Clone)]
 pub enum Message {
     Tick,
     RecTick(Instant),
-    ScreenShareAdd(u32),
-    MicrophoneAdd(u32),
+    ScreenShareAdd(u32, AppInfo),
+    MicrophoneAdd(u32, AppInfo),
     PipeWireNodeRemove(u32),
-    CameraOpen(PathBuf),
-    CameraClose(PathBuf),
+    CameraOpen(PathBuf, Vec<AppInfo>),
+    CameraClose(PathBuf, Vec<AppInfo>),
     CameraPrevious(HashMap<PathBuf, (i32, i32)>),
     CameraReset(PathBuf),
+    TogglePopup,
+    ClosePopup,
+    KillProcess(u32),
+}
+
+impl PrivacyIndicator {
+    fn refresh_shared(&mut self) {
+        self.shared = Shared {
+            microphone: self.microphones.values().cloned().collect(),
+            screenshare: self.screenshares.values().cloned().collect(),
+            camera: self
+                .cameras
+                .iter()
+                .filter(|(_, (shares, min))| shares - min > 0)
+                .flat_map(|(path, _)| {
+                    self.camera_apps.get(path).cloned().unwrap_or_default()
+                })
+                .collect(),
+        };
+    }
 }
 
 impl Application for PrivacyIndicator {
@@ -89,21 +122,26 @@ impl Application for PrivacyIndicator {
         (app, Task::none())
     }
 
-    fn view(&'_ self) -> Element<'_, Self::Message> {
+    fn on_close_requested(&self, id: window::Id) -> Option<Self::Message> {
+        if self.popup == Some(id) {
+            Some(Message::ClosePopup)
+        } else {
+            None
+        }
+    }
+
+    fn view(&self) -> Element<'_, Self::Message> {
         let horizontal = self.core.applet.is_horizontal();
         let size = self.core.applet.suggested_size(true);
         let pad = self.core.applet.suggested_padding(true);
 
-        let mut shared: Vec<Element<Self::Message>> = vec![];
         let Shared {
             microphone,
             screenshare,
             camera,
-        } = self.shared;
+        } = &self.shared;
 
-        if screenshare || microphone || camera {
-            shared.push(anim![REC_ICON, &self.timeline, size.0].into());
-        } else {
+        if microphone.is_empty() && screenshare.is_empty() && camera.is_empty() {
             return self
                 .core
                 .applet
@@ -111,6 +149,9 @@ impl Application for PrivacyIndicator {
                 .limits(Limits::NONE)
                 .into();
         }
+
+        let mut icons: Vec<Element<Self::Message>> =
+            vec![anim![REC_ICON, &self.timeline, size.0].into()];
 
         let icon_style = Rc::new(|theme: &Theme| SvgStyle {
             color: Some(theme.cosmic().button_color().into()),
@@ -121,14 +162,14 @@ impl Application for PrivacyIndicator {
                 .size(size.0)
         };
 
-        if camera {
-            shared.push(indicator("camera-web-symbolic").into());
+        if !camera.is_empty() {
+            icons.push(indicator("camera-web-symbolic").into());
         }
-        if microphone {
-            shared.push(indicator("audio-input-microphone-symbolic").into());
+        if !microphone.is_empty() {
+            icons.push(indicator("audio-input-microphone-symbolic").into());
         }
-        if screenshare {
-            shared.push(indicator("accessories-screenshot-symbolic").into());
+        if !screenshare.is_empty() {
+            icons.push(indicator("accessories-screenshot-symbolic").into());
         }
 
         let container_style = |theme: &Theme| {
@@ -144,12 +185,13 @@ impl Application for PrivacyIndicator {
                 ..Default::default()
             }
         };
-        let container = if horizontal {
-            Row::with_children(shared)
+
+        let content = if horizontal {
+            Row::with_children(icons)
                 .spacing(pad.0)
                 .apply(layer_container)
         } else {
-            Column::with_children(shared)
+            Column::with_children(icons)
                 .spacing(pad.1)
                 .apply(layer_container)
         }
@@ -158,54 +200,133 @@ impl Application for PrivacyIndicator {
 
         self.core
             .applet
-            .autosize_window(container)
+            .autosize_window(mouse_area(content).on_press(Message::TogglePopup))
             .limits(Limits::NONE)
+            .into()
+    }
+
+    fn view_window(&self, _id: window::Id) -> Element<'_, Self::Message> {
+        let Shared {
+            microphone,
+            screenshare,
+            camera,
+        } = &self.shared;
+
+        let mut rows: Vec<Element<Self::Message>> = vec![];
+
+        macro_rules! section {
+            ($label:expr, $apps:expr) => {
+                if !$apps.is_empty() {
+                    if !rows.is_empty() {
+                        rows.push(divider::horizontal::default().into());
+                    }
+                    rows.push(padded_control(text::heading($label)).into());
+                    for app in $apps {
+                        let kill_btn = cosmic::widget::button::destructive("Kill")
+                            .on_press_maybe(if app.pid > 0 {
+                                Some(Message::KillProcess(app.pid))
+                            } else {
+                                None
+                            });
+                        rows.push(
+                            padded_control(
+                                Row::new()
+                                    .push(text::body(app.name.as_str()).width(Length::Fill))
+                                    .push(kill_btn)
+                                    .align_y(Alignment::Center),
+                            )
+                            .into(),
+                        );
+                    }
+                }
+            };
+        }
+
+        section!("Camera", camera);
+        section!("Microphone", microphone);
+        section!("Screen Share", screenshare);
+
+        self.core
+            .applet
+            .popup_container(Column::with_children(rows))
             .into()
     }
 
     fn update(&mut self, message: Self::Message) -> Task<Self::Message> {
         match message {
             Message::Tick => {
-                self.shared = Shared {
-                    microphone: !self.microphones.is_empty(),
-                    screenshare: !self.screenshares.is_empty(),
-                    camera: self
-                        .cameras
-                        .values()
-                        .fold(0, |acc, (shares, min)| acc + shares - min)
-                        > 0,
-                };
+                self.refresh_shared();
             }
-            Message::CameraPrevious(cameras) => self.cameras = cameras,
-            Message::CameraOpen(path) => {
+            Message::CameraPrevious(cameras) => {
+                self.cameras = cameras;
+                self.refresh_shared();
+            }
+            Message::CameraOpen(path, apps) => {
                 self.cameras
-                    .entry(path)
+                    .entry(path.clone())
                     .and_modify(|v| v.0 += 1)
                     .or_insert((1, 0));
+                self.camera_apps.insert(path, apps);
+                self.refresh_shared();
             }
-            Message::CameraClose(path) => {
+            Message::CameraClose(path, apps) => {
                 self.cameras
-                    .entry(path)
+                    .entry(path.clone())
                     .and_modify(|v| {
                         v.0 -= 1;
                         v.1 = v.1.min(v.0);
                     })
                     .or_insert((0, 0));
+                self.camera_apps.insert(path, apps);
+                self.refresh_shared();
             }
             Message::CameraReset(path) => {
                 self.cameras.remove(&path);
+                self.camera_apps.remove(&path);
+                self.refresh_shared();
             }
-            Message::ScreenShareAdd(id) => {
-                self.screenshares.insert(id);
+            Message::ScreenShareAdd(id, info) => {
+                self.screenshares.insert(id, info);
+                self.refresh_shared();
             }
-            Message::MicrophoneAdd(id) => {
-                self.microphones.insert(id);
+            Message::MicrophoneAdd(id, info) => {
+                self.microphones.insert(id, info);
+                self.refresh_shared();
             }
             Message::PipeWireNodeRemove(id) => {
                 self.screenshares.remove(&id);
                 self.microphones.remove(&id);
+                self.refresh_shared();
             }
-            Message::RecTick(now) => self.timeline.now(now),
+            Message::RecTick(now) => {
+                self.timeline.now(now);
+            }
+            Message::TogglePopup => {
+                if let Some(id) = self.popup.take() {
+                    return cosmic::iced_winit::platform_specific::wayland::commands::popup::destroy_popup(id);
+                }
+                let new_id = window::Id::unique();
+                self.popup = Some(new_id);
+                let settings = self.core.applet.get_popup_settings(
+                    self.core.main_window_id().unwrap_or(window::Id::RESERVED),
+                    new_id,
+                    None,
+                    None,
+                    None,
+                );
+                return cosmic::iced_winit::platform_specific::wayland::commands::popup::get_popup(settings);
+            }
+            Message::ClosePopup => {
+                if let Some(id) = self.popup.take() {
+                    return cosmic::iced_winit::platform_specific::wayland::commands::popup::destroy_popup(id);
+                }
+            }
+            Message::KillProcess(pid) => {
+                std::process::Command::new("kill")
+                    .arg(pid.to_string())
+                    .spawn()
+                    .ok();
+            }
         }
         Task::none()
     }
@@ -229,44 +350,51 @@ impl Application for PrivacyIndicator {
                     let _listener = registry
                         .add_listener_local()
                         .global(move |global| {
-                            if global.type_.to_str() == "PipeWire:Interface:Node" {
-                                global.props.map(|props| {
-                                    props
-                                        .get("media.class")
-                                        .map(|media_class| match media_class {
-                                            "Stream/Input/Video" => {
-                                                // Screen captures/recordings in wayland are usually done through pipewire
-                                                let mut output = output.clone();
-                                                while output
-                                                    .try_send(Message::ScreenShareAdd(global.id))
-                                                    .is_err()
-                                                {
-                                                    eprintln!(
-                                                        "Failed to send ScreenCast share event"
-                                                    );
-                                                }
-                                            }
-                                            "Stream/Input/Audio" => {
-                                                // Microphones are
-                                                let mut output = output.clone();
-                                                while output
-                                                    .try_send(Message::MicrophoneAdd(global.id))
-                                                    .is_err()
-                                                {
-                                                    eprintln!(
-                                                        "Failed to send Microphone share event"
-                                                    );
-                                                }
-                                            }
-                                            _ => (),
-                                        })
-                                });
+                            if global.type_.to_str() != "PipeWire:Interface:Node" {
+                                return;
+                            }
+                            let Some(props) = global.props else { return };
+                            let name = props
+                                .get("application.name")
+                                .or_else(|| props.get("node.name"))
+                                .unwrap_or("Unknown")
+                                .to_string();
+                            let pid = props
+                                .get("application.process.id")
+                                .and_then(|s| s.parse::<u32>().ok())
+                                .unwrap_or(0);
+                            let info = AppInfo { name, pid };
+                            let Some(media_class) = props.get("media.class") else {
+                                return;
+                            };
+                            let msg = match media_class {
+                                "Stream/Input/Video" => {
+                                    Some(Message::ScreenShareAdd(global.id, info))
+                                }
+                                "Stream/Input/Audio" => {
+                                    Some(Message::MicrophoneAdd(global.id, info))
+                                }
+                                _ => None,
+                            };
+                            if let Some(msg) = msg {
+                                let mut out = output.clone();
+                                loop {
+                                    match out.try_send(msg.clone()) {
+                                        Ok(_) => break,
+                                        Err(_) => {
+                                            eprintln!("Failed to send PipeWire event")
+                                        }
+                                    }
+                                }
                             }
                         })
                         .global_remove(move |id| {
-                            let mut output = output_remove.clone();
-                            while output.try_send(Message::PipeWireNodeRemove(id)).is_err() {
-                                eprintln!("Failed to send unshare event");
+                            let mut out = output_remove.clone();
+                            loop {
+                                match out.try_send(Message::PipeWireNodeRemove(id)) {
+                                    Ok(_) => break,
+                                    Err(_) => eprintln!("Failed to send unshare event"),
+                                }
                             }
                         })
                         .register();
@@ -279,14 +407,14 @@ impl Application for PrivacyIndicator {
             channel(100, |mut output| async {
                 std::thread::spawn(move || {
                     let open_cameras = open_cameras();
-                    while output
-                        .try_send(Message::CameraPrevious(open_cameras.clone()))
-                        .is_err()
-                    {
-                        eprintln!("Failed to send previously open camera event");
+                    loop {
+                        match output.try_send(Message::CameraPrevious(open_cameras.clone())) {
+                            Ok(_) => break,
+                            Err(_) => eprintln!("Failed to send previously open camera event"),
+                        }
                     }
                     let (mut inotify, mut wd_path) = get_inotify();
-                    let mut event_buffer = [0; 1024];
+                    let mut event_buffer = [0; 4096];
 
                     loop {
                         for event in inotify
@@ -294,7 +422,9 @@ impl Application for PrivacyIndicator {
                             .expect("Failed to read events")
                         {
                             match event.mask {
-                                EventMask::CREATE | EventMask::ATTRIB | EventMask::DELETE_SELF => {
+                                EventMask::CREATE
+                                | EventMask::ATTRIB
+                                | EventMask::DELETE_SELF => {
                                     if event.mask == EventMask::DELETE_SELF
                                         || event
                                             .name
@@ -304,39 +434,51 @@ impl Application for PrivacyIndicator {
                                     {
                                         let old_wd_paths = wd_path;
                                         (inotify, wd_path) = get_inotify();
-                                        let old_paths =
-                                            old_wd_paths.left_values().collect::<HashSet<_>>();
-                                        let new_paths =
-                                            wd_path.left_values().collect::<HashSet<_>>();
+                                        let old_paths = old_wd_paths
+                                            .left_values()
+                                            .collect::<std::collections::HashSet<_>>();
+                                        let new_paths = wd_path
+                                            .left_values()
+                                            .collect::<std::collections::HashSet<_>>();
                                         for &path in old_paths.difference(&new_paths) {
-                                            while output
-                                                .try_send(Message::CameraReset(path.clone()))
-                                                .is_err()
-                                            {
-                                                eprintln!("Failed to send camera reset event");
+                                            loop {
+                                                match output.try_send(Message::CameraReset(
+                                                    path.clone(),
+                                                )) {
+                                                    Ok(_) => break,
+                                                    Err(_) => eprintln!(
+                                                        "Failed to send camera reset event"
+                                                    ),
+                                                }
                                             }
                                         }
                                     }
                                 }
                                 EventMask::OPEN => {
                                     wd_path.get_by_right(&event.wd).inspect(|&path| {
-                                        println!("open {path:?}");
-                                        while output
-                                            .try_send(Message::CameraOpen(path.clone()))
-                                            .is_err()
-                                        {
-                                            eprintln!("Failed to send camera open event");
+                                        let apps = procs_using_camera(path);
+                                        let msg = Message::CameraOpen(path.clone(), apps);
+                                        loop {
+                                            match output.try_send(msg.clone()) {
+                                                Ok(_) => break,
+                                                Err(_) => eprintln!(
+                                                    "Failed to send camera open event"
+                                                ),
+                                            }
                                         }
                                     });
                                 }
                                 EventMask::CLOSE_WRITE | EventMask::CLOSE_NOWRITE => {
                                     wd_path.get_by_right(&event.wd).inspect(|&path| {
-                                        println!("close {path:?}");
-                                        while output
-                                            .try_send(Message::CameraClose(path.clone()))
-                                            .is_err()
-                                        {
-                                            eprintln!("Failed to send camera close event");
+                                        let apps = procs_using_camera(path);
+                                        let msg = Message::CameraClose(path.clone(), apps);
+                                        loop {
+                                            match output.try_send(msg.clone()) {
+                                                Ok(_) => break,
+                                                Err(_) => eprintln!(
+                                                    "Failed to send camera close event"
+                                                ),
+                                            }
                                         }
                                     });
                                 }
