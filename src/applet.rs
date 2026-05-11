@@ -14,21 +14,13 @@ use cosmic::{
     applet::padded_control,
     cosmic_theme::palette::WithAlpha,
     iced::{
-        Alignment, Background, Border, Length, Subscription,
-        core::layout::Limits,
-        stream::channel,
+        Alignment, Background, Border, Length, Subscription, core::layout::Limits, stream::channel,
         window,
     },
     theme::{Container, Svg, Theme},
     widget::{
-        Column, Row,
-        container::Style as CtnStyle,
-        divider,
-        icon,
-        layer_container,
-        mouse_area,
-        svg::Style as SvgStyle,
-        text,
+        Column, Row, container::Style as CtnStyle, divider, icon, layer_container, mouse_area,
+        svg::Style as SvgStyle, text,
     },
 };
 use cosmic_time::{Timeline, anim, chain};
@@ -84,9 +76,7 @@ impl PrivacyIndicator {
                 .cameras
                 .iter()
                 .filter(|(_, (shares, min))| shares - min > 0)
-                .flat_map(|(path, _)| {
-                    self.camera_apps.get(path).cloned().unwrap_or_default()
-                })
+                .flat_map(|(path, _)| self.camera_apps.get(path).cloned().unwrap_or_default())
                 .collect(),
         };
     }
@@ -222,12 +212,13 @@ impl Application for PrivacyIndicator {
                     }
                     rows.push(padded_control(text::heading($label)).into());
                     for app in $apps {
-                        let kill_btn = cosmic::widget::button::destructive("Kill")
-                            .on_press_maybe(if app.pid > 0 {
+                        let kill_btn = cosmic::widget::button::destructive("Kill").on_press_maybe(
+                            if app.pid > 0 {
                                 Some(Message::KillProcess(app.pid))
                             } else {
                                 None
-                            });
+                            },
+                        );
                         rows.push(
                             padded_control(
                                 Row::new()
@@ -314,7 +305,9 @@ impl Application for PrivacyIndicator {
                     None,
                     None,
                 );
-                return cosmic::iced_winit::platform_specific::wayland::commands::popup::get_popup(settings);
+                return cosmic::iced_winit::platform_specific::wayland::commands::popup::get_popup(
+                    settings,
+                );
             }
             Message::ClosePopup => {
                 if let Some(id) = self.popup.take() {
@@ -422,9 +415,7 @@ impl Application for PrivacyIndicator {
                             .expect("Failed to read events")
                         {
                             match event.mask {
-                                EventMask::CREATE
-                                | EventMask::ATTRIB
-                                | EventMask::DELETE_SELF => {
+                                EventMask::CREATE | EventMask::ATTRIB | EventMask::DELETE_SELF => {
                                     if event.mask == EventMask::DELETE_SELF
                                         || event
                                             .name
@@ -442,9 +433,9 @@ impl Application for PrivacyIndicator {
                                             .collect::<std::collections::HashSet<_>>();
                                         for &path in old_paths.difference(&new_paths) {
                                             loop {
-                                                match output.try_send(Message::CameraReset(
-                                                    path.clone(),
-                                                )) {
+                                                match output
+                                                    .try_send(Message::CameraReset(path.clone()))
+                                                {
                                                     Ok(_) => break,
                                                     Err(_) => eprintln!(
                                                         "Failed to send camera reset event"
@@ -461,9 +452,9 @@ impl Application for PrivacyIndicator {
                                         loop {
                                             match output.try_send(msg.clone()) {
                                                 Ok(_) => break,
-                                                Err(_) => eprintln!(
-                                                    "Failed to send camera open event"
-                                                ),
+                                                Err(_) => {
+                                                    eprintln!("Failed to send camera open event")
+                                                }
                                             }
                                         }
                                     });
@@ -475,9 +466,9 @@ impl Application for PrivacyIndicator {
                                         loop {
                                             match output.try_send(msg.clone()) {
                                                 Ok(_) => break,
-                                                Err(_) => eprintln!(
-                                                    "Failed to send camera close event"
-                                                ),
+                                                Err(_) => {
+                                                    eprintln!("Failed to send camera close event")
+                                                }
                                             }
                                         }
                                     });

@@ -6,10 +6,10 @@ use std::time::Duration;
 
 use cosmic::cosmic_theme::palette::Mix;
 use cosmic::theme::{Svg, Theme};
-use cosmic::widget::{icon, icon::Handle, svg::Style as SvgStyle, Icon, Id as CosmicId};
+use cosmic::widget::{Icon, Id as CosmicId, icon, icon::Handle, svg::Style as SvgStyle};
 use cosmic_time::{
-    timeline::{Chain as TimelineChain, Frame, Interped},
     Ease, MovementType, Quadratic, Repeat, Timeline,
+    timeline::{Chain as TimelineChain, Frame, Interped},
 };
 
 static REC_ICON_HANDLE: LazyLock<Handle> =
