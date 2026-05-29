@@ -34,6 +34,10 @@ use cosmic_time::{Timeline, anim, chain};
 
 use inotify::EventMask;
 use pipewire::{channel::Sender, context::ContextRc, main_loop::MainLoopRc};
+use libpulse_binding as pulse;
+use pulse::mainloop::threaded::Mainloop as PulseMainloop;
+use pulse::context::Context as PulseContext;
+use pulse::context::State as PulseContextState;
 
 use crate::{
     CONFIG_VERSION, Config,
@@ -61,6 +65,7 @@ pub struct PrivacyIndicator {
     core: Core,
     timeline: Timeline,
     shared: Shared,
+    default_source_muted: Option<bool>,
     microphones: HashMap<u32, String>,
     screenshares: HashMap<u32, String>,
     cameras: HashMap<PathBuf, (i32, i32)>,
@@ -83,6 +88,7 @@ pub enum Message {
     TogglePopup,
     ClosePopup(PopupId),
     KillProcess(u32),
+    DefaultSourceMute(bool),
     Config(Config),
 }
 
@@ -148,23 +154,36 @@ impl Application for PrivacyIndicator {
         let mut icons: Vec<Element<Self::Message>> =
             vec![anim![REC_ICON, &self.timeline, size.0].into()];
 
-        let icon_style = Rc::new(|theme: &Theme| SvgStyle {
+        let icon_style: Rc<dyn Fn(&Theme) -> SvgStyle> = Rc::new(|theme: &Theme| SvgStyle {
             color: Some(theme.cosmic().button_color().into()),
         });
-        let indicator = |name: &str| {
+        let muted_icon_style: Rc<dyn Fn(&Theme) -> SvgStyle> = Rc::new(|theme: &Theme| SvgStyle {
+            color: Some(theme.cosmic().destructive_text_color().into()),
+        });
+        let indicator = |name: &str, style: Rc<dyn Fn(&Theme) -> SvgStyle>| {
             icon(icon::from_name(name).into())
-                .class(Svg::Custom(icon_style.clone()))
+                .class(Svg::Custom(style))
                 .size(size.0)
         };
 
         if camera {
-            icons.push(indicator("camera-web-symbolic").into());
+            icons.push(indicator("camera-web-symbolic", icon_style.clone()).into());
         }
         if microphone {
-            icons.push(indicator("audio-input-microphone-symbolic").into());
+            let mic_icon = if self.default_source_muted.unwrap_or(false) {
+                "microphone-sensitivity-muted-symbolic"
+            } else {
+                "audio-input-microphone-symbolic"
+            };
+            let mic_style = if self.default_source_muted.unwrap_or(false) {
+                muted_icon_style.clone()
+            } else {
+                icon_style.clone()
+            };
+            icons.push(indicator(mic_icon, mic_style).into());
         }
         if screenshare {
-            icons.push(indicator("accessories-screenshot-symbolic").into());
+            icons.push(indicator("accessories-screenshot-symbolic", icon_style.clone()).into());
         }
 
         let container_style = |theme: &Theme| {
@@ -338,6 +357,9 @@ impl Application for PrivacyIndicator {
                     println!("Failed to kill process {pid}: {e}");
                 }
             }
+            Message::DefaultSourceMute(muted) => {
+                self.default_source_muted = Some(muted);
+            }
             Message::Config(config) => self.config = config,
         }
         Task::none()
@@ -355,7 +377,9 @@ impl Application for PrivacyIndicator {
         };
         let tick = cosmic::iced::time::every(Duration::from_secs(2)).map(|_| Message::Tick);
 
-        Subscription::batch([pw_shares, camera_shares, config, timeline, tick])
+        let pulse_sub = Self::pulse_subscription();
+
+        Subscription::batch([pw_shares, camera_shares, config, timeline, tick, pulse_sub])
     }
 
     fn style(&self) -> Option<cosmic::iced_runtime::Appearance> {
@@ -543,5 +567,123 @@ impl PrivacyIndicator {
             })
         };
         Subscription::run(inotify)
+    }
+
+    fn pulse_subscription() -> Subscription<Message> {
+        let pulse = || {
+            channel(10, |mut output| async move {
+                std::thread::spawn(move || {
+                    use std::sync::mpsc;
+
+                    let mut mainloop = match PulseMainloop::new() {
+                        Some(mainloop) => mainloop,
+                        None => {
+                            eprintln!("Failed to create Pulse main loop");
+                            return;
+                        }
+                    };
+
+                    let mut context = match PulseContext::new(&mainloop, "cosmic-privacy-indicator") {
+                        Some(context) => context,
+                        None => {
+                            eprintln!("Failed to create Pulse context");
+                            return;
+                        }
+                    };
+
+                    if let Err(e) = context.connect(None, pulse::context::FlagSet::NOFLAGS, None) {
+                        eprintln!("Failed to connect Pulse context: {:?}", e);
+                        return;
+                    }
+
+                    if let Err(e) = mainloop.start() {
+                        eprintln!("Failed to start Pulse main loop: {:?}", e);
+                        return;
+                    }
+
+                    loop {
+                        match context.get_state() {
+                            PulseContextState::Ready => break,
+                            PulseContextState::Failed | PulseContextState::Terminated => {
+                                eprintln!("Pulse context failed to connect");
+                                return;
+                            }
+                            _ => std::thread::sleep(Duration::from_millis(100)),
+                        }
+                    }
+
+                    let mut last_muted: Option<bool> = None;
+
+                    loop {
+                        let (server_tx, server_rx) = mpsc::channel::<Option<String>>();
+                        let introspector = context.introspect();
+                        introspector.get_server_info(move |server_info| {
+                            let _ = server_tx.send(
+                                server_info
+                                    .default_source_name
+                                    .as_ref()
+                                    .map(|name| name.to_string()),
+                            );
+                        });
+
+                        let default_source = match server_rx.recv_timeout(Duration::from_secs(2)) {
+                            Ok(Some(name)) => name,
+                            Ok(None) => {
+                                eprintln!("Pulse server did not report a default source");
+                                std::thread::sleep(Duration::from_secs(2));
+                                continue;
+                            }
+                            Err(_) => {
+                                eprintln!("Timed out waiting for Pulse server info");
+                                std::thread::sleep(Duration::from_secs(2));
+                                continue;
+                            }
+                        };
+
+                        let (mute_tx, mute_rx) = mpsc::channel::<Option<bool>>();
+                        let introspector = context.introspect();
+                        introspector.get_source_info_by_name(&default_source, move |result| {
+                            use pulse::callbacks::ListResult;
+
+                            match result {
+                                ListResult::Item(info) => {
+                                    let _ = mute_tx.send(Some(info.mute));
+                                }
+                                ListResult::End | ListResult::Error => {
+                                    let _ = mute_tx.send(None);
+                                }
+                            }
+                        });
+
+                        let muted = match mute_rx.recv_timeout(Duration::from_secs(2)) {
+                            Ok(Some(muted)) => muted,
+                            Ok(None) => {
+                                eprintln!("Pulse did not return a source mute state");
+                                std::thread::sleep(Duration::from_secs(2));
+                                continue;
+                            }
+                            Err(_) => {
+                                eprintln!("Timed out waiting for Pulse source info");
+                                std::thread::sleep(Duration::from_secs(2));
+                                continue;
+                            }
+                        };
+
+                        if last_muted != Some(muted) {
+                            last_muted = Some(muted);
+                            loop {
+                                match output.try_send(Message::DefaultSourceMute(muted)) {
+                                    Ok(()) => break,
+                                    Err(_) => eprintln!("Failed to send default source mute event"),
+                                }
+                            }
+                        }
+
+                        std::thread::sleep(Duration::from_secs(2));
+                    }
+                });
+            })
+        };
+        Subscription::run(pulse)
     }
 }

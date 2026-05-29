@@ -13,6 +13,7 @@ inotify = "0.11.0"
 nix = { version = "0.31.3", features = ["signal"] }
 pipewire = "0.10.0"
 serde = "1.0.228"
+libpulse-binding = "2.27.0"
 
 [dependencies.libcosmic]
 git = "https://github.com/pop-os/libcosmic.git"
