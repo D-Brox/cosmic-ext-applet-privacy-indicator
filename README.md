@@ -26,6 +26,8 @@ Install the build dependencies (or equivalent packages in non debian-based distr
 - libxkbcommon-dev
 - libpipewire-0.3-dev 
 
+Note: microphone mute detection relies on Pulse compatibility (`pipewire-pulse` or a PulseAudio server) so the default source mute state may not be available in sandboxed environments like Flatpak unless Pulse access is exposed.
+
 Build and install the project:
 
 ```bash
