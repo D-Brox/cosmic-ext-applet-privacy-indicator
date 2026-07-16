@@ -27,8 +27,8 @@ use cosmic::{
     surface::action::{LiveSettings, app_popup, destroy_popup},
     theme::{Container, Svg, Theme},
     widget::{
-        Column, Row, button, container::Style as CtnStyle, divider, icon, layer_container,
-        mouse_area, svg::Style as SvgStyle, text,
+        Column, Row, button, checkbox, container::Style as CtnStyle, divider, icon,
+        layer_container, mouse_area, svg::Style as SvgStyle, text,
     },
 };
 use cosmic_time::{Timeline, anim, chain};
@@ -36,8 +36,12 @@ use cosmic_time::{Timeline, anim, chain};
 use inotify::EventMask;
 use pipewire::{channel::Sender as PwSender, context::ContextRc, main_loop::MainLoopRc};
 
+use cosmic::cosmic_config::CosmicConfigEntry;
+use jiff::Zoned;
+
 use crate::{
     CONFIG_VERSION, Config,
+    audit::{self, DeviceKind},
     camera::{get_inotify, open_cameras, procs_using_camera},
 };
 
@@ -65,8 +69,13 @@ pub struct PrivacyIndicator {
     microphones: HashMap<u32, String>,
     screenshares: HashMap<u32, String>,
     cameras: HashMap<PathBuf, (i32, i32)>,
+    /// Start time of each active PipeWire node (mic/screenshare), keyed by node id.
+    pw_starts: HashMap<u32, Zoned>,
+    /// Start time and app name of each in-use camera, keyed by device path.
+    camera_active: HashMap<PathBuf, (Zoned, String)>,
     popup: Option<PopupId>,
     config: Config,
+    config_handler: Option<cosmic_config::Config>,
 }
 
 #[derive(Debug, Clone)]
@@ -84,6 +93,7 @@ pub enum Message {
     TogglePopup,
     ClosePopup(PopupId),
     KillProcess(u32),
+    ToggleAuditLog(bool),
     Config(Config),
 }
 
@@ -112,6 +122,7 @@ impl Application for PrivacyIndicator {
             core,
             timeline,
             config: flags,
+            config_handler: cosmic_config::Config::new(Self::APP_ID, CONFIG_VERSION).ok(),
             ..Default::default()
         };
 
@@ -257,6 +268,17 @@ impl Application for PrivacyIndicator {
         section!("Microphone", microphones, DisconnectNode);
         section!("Screen Share", screenshares, DisconnectNode);
 
+        if !rows.is_empty() {
+            rows.push(divider::horizontal::default().into());
+        }
+        rows.push(
+            padded_control(
+                checkbox("Audit log", self.config.audit_log)
+                    .on_toggle(Message::ToggleAuditLog),
+            )
+            .into(),
+        );
+
         self.core
             .applet
             .popup_container(Column::with_children(rows))
@@ -280,30 +302,71 @@ impl Application for PrivacyIndicator {
                 self.cameras = cameras;
             }
             Message::CameraOpen(path) => {
-                self.cameras
+                let v = self
+                    .cameras
                     .entry(path.clone())
                     .and_modify(|v| v.0 += 1)
                     .or_insert((1, 0));
+                let in_use = v.0 - v.1 > 0;
+                // On the transition to "in use", open an audit session and
+                // resolve which application opened the device.
+                if self.config.audit_log && in_use && !self.camera_active.contains_key(&path) {
+                    let name = procs_using_camera(&path)
+                        .into_iter()
+                        .next()
+                        .map(|a| a.name.into_owned())
+                        .unwrap_or_else(|| "unknown".to_string());
+                    self.camera_active.insert(path.clone(), (Zoned::now(), name));
+                }
             }
             Message::CameraClose(path) => {
-                self.cameras
+                let v = self
+                    .cameras
                     .entry(path.clone())
                     .and_modify(|v| {
                         v.0 -= 1;
                         v.1 = v.1.min(v.0);
                     })
                     .or_insert((0, 0));
+                let in_use = v.0 - v.1 > 0;
+                // On the transition back to "not in use", close the session.
+                if !in_use && let Some((start, name)) = self.camera_active.remove(&path) {
+                    if self.config.audit_log {
+                        audit::record(DeviceKind::Camera, &name, &start, &Zoned::now());
+                    }
+                }
             }
             Message::CameraReset(path) => {
+                // Device removed while still open: close any open session.
+                if let Some((start, name)) = self.camera_active.remove(&path) {
+                    if self.config.audit_log {
+                        audit::record(DeviceKind::Camera, &name, &start, &Zoned::now());
+                    }
+                }
                 self.cameras.remove(&path);
             }
             Message::ScreenShareAdd(id, info) => {
+                if self.config.audit_log {
+                    self.pw_starts.entry(id).or_insert_with(Zoned::now);
+                }
                 self.screenshares.insert(id, info);
             }
             Message::MicrophoneAdd(id, info) => {
+                if self.config.audit_log {
+                    self.pw_starts.entry(id).or_insert_with(Zoned::now);
+                }
                 self.microphones.insert(id, info);
             }
             Message::PipeWireNodeRemove(id) => {
+                let start = self.pw_starts.remove(&id);
+                if self.config.audit_log && let Some(start) = start {
+                    let now = Zoned::now();
+                    if let Some(name) = self.screenshares.get(&id) {
+                        audit::record(DeviceKind::ScreenShare, name, &start, &now);
+                    } else if let Some(name) = self.microphones.get(&id) {
+                        audit::record(DeviceKind::Microphone, name, &start, &now);
+                    }
+                }
                 self.screenshares.remove(&id);
                 self.microphones.remove(&id);
             }
@@ -344,6 +407,14 @@ impl Application for PrivacyIndicator {
             Message::KillProcess(pid) => {
                 if let Err(e) = kill(Pid::from_raw(pid.cast_signed()), Signal::SIGTERM) {
                     println!("Failed to kill process {pid}: {e}");
+                }
+            }
+            Message::ToggleAuditLog(enabled) => {
+                self.config.audit_log = enabled;
+                if let Some(handler) = &self.config_handler
+                    && let Err(e) = self.config.write_entry(handler)
+                {
+                    println!("Failed to save audit_log config: {e:?}");
                 }
             }
             Message::Config(config) => self.config = config,
