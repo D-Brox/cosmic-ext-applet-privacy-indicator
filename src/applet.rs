@@ -13,17 +13,18 @@ use std::{
 
 use cosmic::{
     Application, Apply, Element,
-    app::{Core, Task},
+    app::{self, Core, Task},
     applet::padded_control,
     cosmic_config,
     cosmic_theme::palette::WithAlpha,
     iced::{
         Alignment, Background, Border, Length, Subscription,
         core::layout::Limits,
+        futures::{SinkExt, channel::mpsc::Sender},
         stream::channel,
         window::{self, Id as PopupId},
     },
-    iced_winit::commands::popup::{destroy_popup, get_popup},
+    surface::action::{LiveSettings, app_popup, destroy_popup},
     theme::{Container, Svg, Theme},
     widget::{
         Column, Row, button, container::Style as CtnStyle, divider, icon, layer_container,
@@ -33,7 +34,7 @@ use cosmic::{
 use cosmic_time::{Timeline, anim, chain};
 
 use inotify::EventMask;
-use pipewire::{channel::Sender, context::ContextRc, main_loop::MainLoopRc};
+use pipewire::{channel::Sender as PwSender, context::ContextRc, main_loop::MainLoopRc};
 
 use crate::{
     CONFIG_VERSION, Config,
@@ -41,7 +42,7 @@ use crate::{
 };
 
 static REC_ICON: LazyLock<crate::rec_icon::Id> = LazyLock::new(crate::rec_icon::Id::unique);
-static PW_SENDER: OnceLock<Sender<u32>> = OnceLock::new();
+static PW_SENDER: OnceLock<PwSender<u32>> = OnceLock::new();
 
 #[derive(Debug, Clone, Default)]
 pub struct AppInfo<'s> {
@@ -171,7 +172,7 @@ impl Application for PrivacyIndicator {
             let cosmic = theme.cosmic();
             CtnStyle {
                 background: Some(Background::Color(
-                    cosmic.primary.base.with_alpha(0.5).into(),
+                    cosmic.primary(false).base.with_alpha(0.5).into(),
                 )),
                 border: Border {
                     radius: cosmic.corner_radii.radius_xl.into(),
@@ -311,19 +312,26 @@ impl Application for PrivacyIndicator {
             }
             Message::TogglePopup => {
                 if let Some(id) = self.popup.take() {
-                    return destroy_popup(id);
+                    return destroy_popup(id)
+                        .apply(app::Action::Surface)
+                        .apply(cosmic::Action::Cosmic)
+                        .apply(Task::done);
                 }
-                let new_id = window::Id::unique();
-                self.popup = Some(new_id);
-                let settings = self.core.applet.get_popup_settings(
-                    self.core.main_window_id().unwrap_or(window::Id::RESERVED),
-                    new_id,
-                    None,
-                    None,
-                    None,
-                );
-
-                return get_popup(settings);
+                let live_settings = |state: &mut PrivacyIndicator| {
+                    let new_id = window::Id::unique();
+                    state.popup = Some(new_id);
+                    state.core.applet.get_popup_settings(
+                        state.core.main_window_id().unwrap_or(window::Id::RESERVED),
+                        new_id,
+                        None,
+                        None,
+                        None,
+                    )
+                };
+                return app_popup(|_| LiveSettings::default(), live_settings, None)
+                    .apply(app::Action::Surface)
+                    .apply(cosmic::Action::Cosmic)
+                    .apply(Task::done);
             }
             Message::ClosePopup(id) => {
                 self.popup.take_if(|stored_id| stored_id == &id);
@@ -358,7 +366,7 @@ impl Application for PrivacyIndicator {
         Subscription::batch([pw_shares, camera_shares, config, timeline, tick])
     }
 
-    fn style(&self) -> Option<cosmic::iced_runtime::Appearance> {
+    fn style(&self) -> Option<cosmic::iced::theme::Style> {
         Some(cosmic::applet::style())
     }
 }
@@ -384,7 +392,8 @@ impl PrivacyIndicator {
 
     fn pipewire_subscription() -> Subscription<Message> {
         let pw = || {
-            channel(100, |output| async {
+            channel(100, |output: Sender<_>| async {
+                let handle = tokio::runtime::Handle::current();
                 std::thread::spawn(move || {
                     pipewire::init();
                     let main_loop =
@@ -407,6 +416,7 @@ impl PrivacyIndicator {
                     });
 
                     let output_remove = output.clone();
+                    let handle_remove = handle.clone();
                     let _listener = registry
                         .add_listener_local()
                         .global(move |global| {
@@ -432,25 +442,17 @@ impl PrivacyIndicator {
                                 _ => None,
                             };
                             if let Some(msg) = msg {
-                                let mut out = output.clone();
-                                loop {
-                                    match out.try_send(msg.clone()) {
-                                        Ok(()) => break,
-                                        Err(_) => {
-                                            eprintln!("Failed to send PipeWire event");
-                                        }
-                                    }
-                                }
+                                let mut output = output.clone();
+                                handle.spawn(async move {
+                                    let _ = output.send(msg).await;
+                                });
                             }
                         })
                         .global_remove(move |id| {
-                            let mut out = output_remove.clone();
-                            loop {
-                                match out.try_send(Message::PipeWireNodeRemove(id)) {
-                                    Ok(()) => break,
-                                    Err(_) => eprintln!("Failed to send unshare event"),
-                                }
-                            }
+                            let mut output = output_remove.clone();
+                            handle_remove.spawn(async move {
+                                let _ = output.send(Message::PipeWireNodeRemove(id)).await;
+                            });
                         })
                         .register();
                     main_loop.run();
@@ -462,14 +464,14 @@ impl PrivacyIndicator {
 
     fn inotify_subscription() -> Subscription<Message> {
         let inotify = || {
-            channel(100, |mut output| async {
+            channel(100, |output: Sender<_>| async {
+                let handle = tokio::runtime::Handle::current();
                 std::thread::spawn(move || {
-                    let open_cameras = open_cameras();
-                    loop {
-                        match output.try_send(Message::CameraPrevious(open_cameras.clone())) {
-                            Ok(()) => break,
-                            Err(_) => eprintln!("Failed to send previously open camera event"),
-                        }
+                    {
+                        let mut output = output.clone();
+                        handle.spawn(async move {
+                            let _ = output.send(Message::CameraPrevious(open_cameras())).await;
+                        });
                     }
                     let (mut inotify, mut wd_path) = get_inotify();
                     let mut event_buffer = [0; 4096];
@@ -497,43 +499,31 @@ impl PrivacyIndicator {
                                         .left_values()
                                         .collect::<std::collections::HashSet<_>>();
                                     for &path in old_paths.difference(&new_paths) {
-                                        loop {
-                                            match output
-                                                .try_send(Message::CameraReset(path.clone()))
-                                            {
-                                                Ok(()) => break,
-                                                Err(_) => {
-                                                    eprintln!("Failed to send camera reset event");
-                                                }
-                                            }
-                                        }
+                                        let mut output = output.clone();
+                                        let path = path.clone();
+                                        handle.spawn(async move {
+                                            let _ = output.send(Message::CameraReset(path)).await;
+                                        });
                                     }
                                 }
                                 EventMask::OPEN => {
-                                    wd_path.get_by_right(&event.wd).inspect(|&path| {
-                                        let msg = Message::CameraOpen(path.clone());
-                                        loop {
-                                            match output.try_send(msg.clone()) {
-                                                Ok(()) => break,
-                                                Err(_) => {
-                                                    eprintln!("Failed to send camera open event");
-                                                }
-                                            }
-                                        }
-                                    });
+                                    if let Some(path) = wd_path.get_by_right(&event.wd) {
+                                        let mut output = output.clone();
+                                        let path = path.clone();
+                                        handle.spawn(async move {
+                                            let _ = output.send(Message::CameraOpen(path)).await;
+                                        });
+                                    }
                                 }
+
                                 EventMask::CLOSE_WRITE | EventMask::CLOSE_NOWRITE => {
-                                    wd_path.get_by_right(&event.wd).inspect(|&path| {
-                                        let msg = Message::CameraClose(path.clone());
-                                        loop {
-                                            match output.try_send(msg.clone()) {
-                                                Ok(()) => break,
-                                                Err(_) => {
-                                                    eprintln!("Failed to send camera close event");
-                                                }
-                                            }
-                                        }
-                                    });
+                                    if let Some(path) = wd_path.get_by_right(&event.wd) {
+                                        let mut output = output.clone();
+                                        let path = path.clone();
+                                        handle.spawn(async move {
+                                            let _ = output.send(Message::CameraClose(path)).await;
+                                        });
+                                    }
                                 }
                                 _ => {}
                             }

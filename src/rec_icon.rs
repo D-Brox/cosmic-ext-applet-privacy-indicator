@@ -111,7 +111,7 @@ impl RecIcon {
                 SvgStyle {
                     color: Some(
                         cosmic
-                            .background
+                            .background(false)
                             .base
                             .mix(cosmic.destructive_text_color(), value)
                             .into(),
