@@ -7,9 +7,9 @@ use std::{
 use bimap::BiHashMap;
 use inotify::{Inotify, WatchDescriptor, WatchMask};
 
-use crate::applet::AppInfo;
+use crate::applet::{AppInfo, CameraShares};
 
-pub fn open_cameras() -> HashMap<PathBuf, (i32, i32)> {
+pub fn open_cameras() -> HashMap<PathBuf, CameraShares> {
     if std::path::Path::new("/.flatpak-info").exists() {
         return HashMap::new();
     }
@@ -40,8 +40,10 @@ pub fn open_cameras() -> HashMap<PathBuf, (i32, i32)> {
                         None
                     }
                 })
-                .fold(HashMap::<PathBuf, (i32, i32)>::new(), |mut hm, p| {
-                    hm.entry(p).and_modify(|fds| fds.0 += 1).or_insert((1, 0));
+                .fold(HashMap::<PathBuf, CameraShares>::new(), |mut hm, p| {
+                    hm.entry(p)
+                        .and_modify(|fds| fds.shares += 1)
+                        .or_insert(CameraShares { shares: 1, min: 0 });
                     hm
                 })
         })
@@ -49,6 +51,7 @@ pub fn open_cameras() -> HashMap<PathBuf, (i32, i32)> {
 }
 
 /// Scans /proc to find all processes currently holding a file descriptor open on `device`.
+/// This is CPU intensive. **DO NOT** use in the applet main view.
 pub fn procs_using_camera(device: &Path) -> Vec<AppInfo<'_>> {
     if std::path::Path::new("/.flatpak-info").exists() {
         return vec![];
