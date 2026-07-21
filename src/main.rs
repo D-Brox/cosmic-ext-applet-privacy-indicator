@@ -21,8 +21,6 @@ pub const CONFIG_VERSION: u64 = 1;
 pub struct Config {
     pub animated: bool,
     pub refresh: u64,
-    /// When enabled, privacy events are appended to a local, owner-only audit
-    /// log. Opt-in: disabled by default.
     pub audit_log: bool,
 }
 
