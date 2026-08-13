@@ -20,7 +20,7 @@ use cosmic::{
     iced::{
         Alignment, Background, Border, Length, Subscription,
         core::layout::Limits,
-        futures::{SinkExt, channel::mpsc::Sender},
+        futures::channel::mpsc::Sender,
         stream::channel,
         window::{self, Id as PopupId},
     },
@@ -38,7 +38,7 @@ use pipewire::{channel::Sender as PwSender, context::ContextRc, main_loop::MainL
 
 use crate::{
     CONFIG_VERSION, Config,
-    camera::{get_inotify, open_cameras, procs_using_camera},
+    camera::{get_inotify, is_ancestor_or_self, open_cameras, procs_using_camera},
 };
 
 static REC_ICON: LazyLock<crate::rec_icon::Id> = LazyLock::new(crate::rec_icon::Id::unique);
@@ -48,6 +48,7 @@ static PW_SENDER: OnceLock<PwSender<u32>> = OnceLock::new();
 pub struct AppInfo<'s> {
     pub name: Cow<'s, str>,
     pub id: u32,
+    pub pid: Option<u32>,
 }
 
 #[derive(Default)]
@@ -62,9 +63,10 @@ pub struct PrivacyIndicator {
     core: Core,
     timeline: Timeline,
     shared: Shared,
-    microphones: HashMap<u32, String>,
-    screenshares: HashMap<u32, String>,
+    microphones: HashMap<u32, (String, Option<u32>)>,
+    screenshares: HashMap<u32, (String, Option<u32>)>,
     cameras: HashMap<PathBuf, (i32, i32)>,
+    camera_procs: Vec<AppInfo<'static>>,
     popup: Option<PopupId>,
     config: Config,
 }
@@ -73,14 +75,14 @@ pub struct PrivacyIndicator {
 pub enum Message {
     Tick,
     RecTick(Instant),
-    ScreenShareAdd(u32, String),
-    MicrophoneAdd(u32, String),
+    ScreenShareAdd(u32, String, Option<u32>),
+    MicrophoneAdd(u32, String, Option<u32>),
     PipeWireNodeRemove(u32),
     CameraOpen(PathBuf),
     CameraClose(PathBuf),
     CameraPrevious(HashMap<PathBuf, (i32, i32)>),
     CameraReset(PathBuf),
-    DisconnectNode(u32),
+    KillStream { id: u32, name: String, pid: Option<u32> },
     TogglePopup,
     ClosePopup(PopupId),
     KillProcess(u32),
@@ -205,40 +207,43 @@ impl Application for PrivacyIndicator {
         let microphones: Vec<_> = self
             .microphones
             .iter()
-            .map(|(&id, name)| AppInfo {
+            .map(|(&id, (name, pid))| AppInfo {
                 name: name.into(),
                 id,
+                pid: *pid,
             })
             .collect();
         let screenshares: Vec<_> = self
             .screenshares
             .iter()
-            .map(|(&id, name)| AppInfo {
+            .map(|(&id, (name, pid))| AppInfo {
                 name: name.into(),
                 id,
+                pid: *pid,
             })
             .collect();
-        let cameras: Vec<_> = self
-            .cameras
-            .keys()
-            .flat_map(|path| procs_using_camera(path))
-            .collect();
+        // Camera processes are cached in update() (see Tick/TogglePopup): the
+        // /proc scan is far too expensive to run from the render path, which
+        // executes on every frame the popup is visible.
+        let cameras = self.camera_procs.clone();
 
         let mut rows: Vec<Element<Self::Message>> = vec![];
 
         macro_rules! section {
-            ($label:expr, $apps:expr, $id:ident) => {
+            ($label:expr, $apps:expr, $kill_msg:expr, $can_kill:expr) => {
                 if !$apps.is_empty() {
                     if !rows.is_empty() {
                         rows.push(divider::horizontal::default().into());
                     }
                     rows.push(padded_control(text::heading($label)).into());
-                    for app in $apps {
-                        let kill_btn = button::destructive("Kill").on_press_maybe(if app.id > 0 {
-                            Some(Message::$id(app.id))
-                        } else {
-                            None
-                        });
+                    for app in &$apps {
+                        let kill_btn = button::destructive("Kill").on_press_maybe(
+                            if app.id > 0 && $can_kill(app) {
+                                Some($kill_msg(app))
+                            } else {
+                                None
+                            },
+                        );
                         rows.push(
                             padded_control(
                                 Row::new()
@@ -253,9 +258,32 @@ impl Application for PrivacyIndicator {
             };
         }
 
-        section!("Camera", cameras, KillProcess);
-        section!("Microphone", microphones, DisconnectNode);
-        section!("Screen Share", screenshares, DisconnectNode);
+        section!(
+            "Camera",
+            cameras,
+            |app: &AppInfo| Message::KillProcess(app.id),
+            |app: &AppInfo| !is_camera_daemon(&app.name)
+        );
+        section!(
+            "Microphone",
+            microphones,
+            |app: &AppInfo| Message::KillStream {
+                id: app.id,
+                name: app.name.to_string(),
+                pid: app.pid
+            },
+            |_| true
+        );
+        section!(
+            "Screen Share",
+            screenshares,
+            |app: &AppInfo| Message::KillStream {
+                id: app.id,
+                name: app.name.to_string(),
+                pid: app.pid
+            },
+            |_| true
+        );
 
         self.core
             .applet
@@ -275,6 +303,7 @@ impl Application for PrivacyIndicator {
                         .fold(0, |acc, (shares, min)| acc + shares - min)
                         > 0,
                 };
+                self.refresh_camera_procs();
             }
             Message::CameraPrevious(cameras) => {
                 self.cameras = cameras;
@@ -297,11 +326,11 @@ impl Application for PrivacyIndicator {
             Message::CameraReset(path) => {
                 self.cameras.remove(&path);
             }
-            Message::ScreenShareAdd(id, info) => {
-                self.screenshares.insert(id, info);
+            Message::ScreenShareAdd(id, name, pid) => {
+                self.screenshares.insert(id, (name, pid));
             }
-            Message::MicrophoneAdd(id, info) => {
-                self.microphones.insert(id, info);
+            Message::MicrophoneAdd(id, name, pid) => {
+                self.microphones.insert(id, (name, pid));
             }
             Message::PipeWireNodeRemove(id) => {
                 self.screenshares.remove(&id);
@@ -317,6 +346,7 @@ impl Application for PrivacyIndicator {
                         .apply(cosmic::Action::Cosmic)
                         .apply(Task::done);
                 }
+                self.refresh_camera_procs();
                 let live_settings = |state: &mut PrivacyIndicator| {
                     let new_id = window::Id::unique();
                     state.popup = Some(new_id);
@@ -336,17 +366,33 @@ impl Application for PrivacyIndicator {
             Message::ClosePopup(id) => {
                 self.popup.take_if(|stored_id| stored_id == &id);
             }
-            Message::DisconnectNode(id) => {
+            Message::KillStream { id, name, pid } => {
                 if let Some(sender) = PW_SENDER.get() {
                     let _ = sender.send(id);
                 }
+                kill_process(pid, Some(name));
+                if let Some(task) = self.close_popup() {
+                    return task;
+                }
             }
             Message::KillProcess(pid) => {
-                if let Err(e) = kill(Pid::from_raw(pid.cast_signed()), Signal::SIGTERM) {
-                    println!("Failed to kill process {pid}: {e}");
+                kill_process(Some(pid), None);
+                if let Some(task) = self.close_popup() {
+                    return task;
                 }
             }
             Message::Config(config) => self.config = config,
+        }
+        // The popup must never shrink to an empty sliver while open: its corner
+        // radius then exceeds the window geometry and the compositor kills the
+        // connection (radius_too_large protocol error). Close it instead.
+        if self.popup.is_some()
+            && self.microphones.is_empty()
+            && self.screenshares.is_empty()
+            && self.camera_procs.is_empty()
+            && let Some(task) = self.close_popup()
+        {
+            return task;
         }
         Task::none()
     }
@@ -372,6 +418,31 @@ impl Application for PrivacyIndicator {
 }
 
 impl PrivacyIndicator {
+    fn close_popup(&mut self) -> Option<Task<Message>> {
+        let id = self.popup.take()?;
+        Some(
+            destroy_popup(id)
+                .apply(app::Action::Surface)
+                .apply(cosmic::Action::Cosmic)
+                .apply(Task::done),
+        )
+    }
+
+    /// Refresh the cached list of processes using the cameras. Only runs while
+    /// the popup is open: scanning /proc walks every process's fds, so it must
+    /// be done from update() (bounded to once per tick) instead of the render
+    /// path, which runs on every frame the popup is visible.
+    fn refresh_camera_procs(&mut self) {
+        if self.popup.is_none() {
+            return;
+        }
+        self.camera_procs = self
+            .cameras
+            .keys()
+            .flat_map(|path| procs_using_camera(path))
+            .collect();
+    }
+
     pub fn config_subscription() -> Subscription<Message> {
         struct ConfigSubscription;
         cosmic_config::config_subscription(
@@ -393,7 +464,6 @@ impl PrivacyIndicator {
     fn pipewire_subscription() -> Subscription<Message> {
         let pw = || {
             channel(100, |output: Sender<_>| async {
-                let handle = tokio::runtime::Handle::current();
                 std::thread::spawn(move || {
                     pipewire::init();
                     let main_loop =
@@ -416,7 +486,6 @@ impl PrivacyIndicator {
                     });
 
                     let output_remove = output.clone();
-                    let handle_remove = handle.clone();
                     let _listener = registry
                         .add_listener_local()
                         .global(move |global| {
@@ -429,30 +498,30 @@ impl PrivacyIndicator {
                                 .or_else(|| props.get("node.name"))
                                 .unwrap_or("Unknown")
                                 .to_string();
+                            let pid = props
+                                .get("application.process.id")
+                                .and_then(|p| p.parse().ok());
                             let Some(media_class) = props.get("media.class") else {
                                 return;
                             };
                             let msg = match media_class {
                                 "Stream/Input/Video" => {
-                                    Some(Message::ScreenShareAdd(global.id, name))
+                                    Some(Message::ScreenShareAdd(global.id, name, pid))
                                 }
                                 "Stream/Input/Audio" => {
-                                    Some(Message::MicrophoneAdd(global.id, name))
+                                    Some(Message::MicrophoneAdd(global.id, name, pid))
                                 }
                                 _ => None,
                             };
                             if let Some(msg) = msg {
-                                let mut output = output.clone();
-                                handle.spawn(async move {
-                                    let _ = output.send(msg).await;
-                                });
+                                send_blocking(&mut output.clone(), msg);
                             }
                         })
                         .global_remove(move |id| {
-                            let mut output = output_remove.clone();
-                            handle_remove.spawn(async move {
-                                let _ = output.send(Message::PipeWireNodeRemove(id)).await;
-                            });
+                            send_blocking(
+                                &mut output_remove.clone(),
+                                Message::PipeWireNodeRemove(id),
+                            );
                         })
                         .register();
                     main_loop.run();
@@ -464,15 +533,14 @@ impl PrivacyIndicator {
 
     fn inotify_subscription() -> Subscription<Message> {
         let inotify = || {
-            channel(100, |output: Sender<_>| async {
-                let handle = tokio::runtime::Handle::current();
+            channel(100, |mut output: Sender<_>| async {
                 std::thread::spawn(move || {
-                    {
-                        let mut output = output.clone();
-                        handle.spawn(async move {
-                            let _ = output.send(Message::CameraPrevious(open_cameras())).await;
-                        });
-                    }
+                    // Ordering invariant: snapshot the camera state BEFORE the
+                    // watch is created, so the snapshot can't overlap the OPEN
+                    // events the watch produces (double-count) and the events
+                    // delivered afterwards stay strictly incremental on it.
+                    send_blocking(&mut output, Message::CameraPrevious(open_cameras()));
+
                     let (mut inotify, mut wd_path) = get_inotify();
                     let mut event_buffer = [0; 4096];
 
@@ -499,30 +567,21 @@ impl PrivacyIndicator {
                                         .left_values()
                                         .collect::<std::collections::HashSet<_>>();
                                     for &path in old_paths.difference(&new_paths) {
-                                        let mut output = output.clone();
-                                        let path = path.clone();
-                                        handle.spawn(async move {
-                                            let _ = output.send(Message::CameraReset(path)).await;
-                                        });
+                                        send_blocking(&mut output, Message::CameraReset(path.clone()));
                                     }
                                 }
                                 EventMask::OPEN => {
                                     if let Some(path) = wd_path.get_by_right(&event.wd) {
-                                        let mut output = output.clone();
-                                        let path = path.clone();
-                                        handle.spawn(async move {
-                                            let _ = output.send(Message::CameraOpen(path)).await;
-                                        });
+                                        send_blocking(&mut output, Message::CameraOpen(path.clone()));
                                     }
                                 }
 
                                 EventMask::CLOSE_WRITE | EventMask::CLOSE_NOWRITE => {
                                     if let Some(path) = wd_path.get_by_right(&event.wd) {
-                                        let mut output = output.clone();
-                                        let path = path.clone();
-                                        handle.spawn(async move {
-                                            let _ = output.send(Message::CameraClose(path)).await;
-                                        });
+                                        send_blocking(
+                                            &mut output,
+                                            Message::CameraClose(path.clone()),
+                                        );
                                     }
                                 }
                                 _ => {}
@@ -533,5 +592,90 @@ impl PrivacyIndicator {
             })
         };
         Subscription::run(inotify)
+    }
+}
+
+/// Camera access through the desktop portal is performed by the PipeWire
+/// daemon itself, so /proc attributes the device to it. Killing it would take
+/// down the camera and audio stack with it, so it must never be offered as a
+/// kill target. Process names (comm) are truncated to 15 chars, hence prefix
+/// matching.
+fn is_camera_daemon(name: &str) -> bool {
+    name.starts_with("pipewire")
+        || name.starts_with("wireplumber")
+        || name.starts_with("xdg-desktop-")
+        || name.starts_with("flatpak-portal")
+}
+
+/// Send SIGTERM, then SIGKILL if the process is still alive after 2s: some
+/// apps catch SIGTERM and hang during shutdown instead of exiting. The pid may
+/// be absent for portal streams, in which case the app is resolved from the
+/// stream name (flatpak apps export FLATPAK_ID in their environment).
+fn kill_process(pid: Option<u32>, name: Option<String>) {
+    std::thread::spawn(move || {
+        let Some(pid) = pid.or_else(|| name.as_deref().and_then(resolve_flatpak_pid)) else {
+            return;
+        };
+        // The applet runs as a child of the desktop panel; signaling an
+        // ancestor would take the panel (or session) down with it.
+        if is_ancestor_or_self(pid) {
+            return;
+        }
+        let pid = Pid::from_raw(pid.cast_signed());
+        let _ = kill(pid, Signal::SIGTERM);
+        std::thread::sleep(Duration::from_secs(2));
+        // kill(pid, None) succeeds only while the process exists and is
+        // signalable; ESRCH means it already exited.
+        if kill(pid, None).is_ok() {
+            let _ = kill(pid, Signal::SIGKILL);
+        }
+    });
+}
+
+/// Resolve the host pid of a flatpak app by its app id (e.g. "org.gnome.Snapshot"),
+/// which the portal reports as the stream name.
+fn resolve_flatpak_pid(app_id: &str) -> Option<u32> {
+    if !app_id.contains('.') {
+        return None;
+    }
+    let needle = format!("FLATPAK_ID={app_id}\0");
+    let mut best: Option<u32> = None;
+    let Ok(procs) = std::fs::read_dir("/proc") else {
+        return None;
+    };
+    for entry in procs.flatten() {
+        let Ok(id) = entry.file_name().to_string_lossy().parse::<u32>() else {
+            continue;
+        };
+        let Ok(env) = std::fs::read(entry.path().join("environ")) else {
+            continue;
+        };
+        if !env.windows(needle.len()).any(|w| w == needle.as_bytes()) {
+            continue;
+        }
+        // Prefer the app process itself over its bwrap wrappers.
+        match std::fs::read_to_string(entry.path().join("comm")) {
+            Ok(comm) if comm.trim() == "bwrap" => best = Some(best.map_or(id, |b| b.max(id))),
+            _ => return Some(id),
+        }
+    }
+    best
+}
+
+/// Send a message to the application channel from a worker thread, preserving
+/// the order in which it was produced. Retries with a small sleep instead of
+/// spinning, so a full channel can't busy-loop the CPU.
+fn send_blocking(output: &mut Sender<Message>, msg: Message) {
+    let mut msg = msg;
+    loop {
+        match output.try_send(msg) {
+            Ok(()) => return,
+            Err(err) if err.is_full() => {
+                msg = err.into_inner();
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            // Receiver dropped: the app is shutting down.
+            Err(_) => return,
+        }
     }
 }
