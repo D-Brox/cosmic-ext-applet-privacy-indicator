@@ -48,8 +48,36 @@ pub fn open_cameras() -> HashMap<PathBuf, (i32, i32)> {
         .unwrap_or_default()
 }
 
+/// True when `pid` is the calling process itself or one of its ancestors. The
+/// applet runs as a child of the desktop panel, so signaling an ancestor would
+/// take the panel (or the whole session) down with it.
+pub fn is_ancestor_or_self(pid: u32) -> bool {
+    let mut cur = std::process::id();
+    loop {
+        if cur == pid {
+            return true;
+        }
+        if cur <= 1 {
+            return false;
+        }
+        let Ok(stat) = std::fs::read_to_string(format!("/proc/{cur}/stat")) else {
+            return false;
+        };
+        // comm can contain spaces and parens; ppid follows the last ')'
+        let Some(Ok(ppid)) = stat
+            .rsplit(')')
+            .next()
+            .and_then(|s| s.split_whitespace().nth(1))
+            .map(|s| s.parse::<u32>())
+        else {
+            return false;
+        };
+        cur = ppid;
+    }
+}
+
 /// Scans /proc to find all processes currently holding a file descriptor open on `device`.
-pub fn procs_using_camera(device: &Path) -> Vec<AppInfo<'_>> {
+pub fn procs_using_camera(device: &Path) -> Vec<AppInfo<'static>> {
     if std::path::Path::new("/.flatpak-info").exists() {
         return vec![];
     }
@@ -78,9 +106,10 @@ pub fn procs_using_camera(device: &Path) -> Vec<AppInfo<'_>> {
                 .trim()
                 .to_string()
                 .into();
-            Some(AppInfo { name, id })
+            Some(AppInfo { name, id, pid: Some(id) })
         })
         .filter(|info| seen_pids.insert(info.id))
+        .filter(|info| !is_ancestor_or_self(info.id))
         .collect()
 }
 
