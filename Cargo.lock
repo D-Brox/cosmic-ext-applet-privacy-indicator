@@ -1017,7 +1017,6 @@ dependencies = [
  "nix",
  "pipewire",
  "serde",
- "tokio",
 ]
 
 [[package]]
