@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 mod applet;
+mod audit;
 mod camera;
 mod rec_icon;
 
@@ -20,6 +21,7 @@ pub const CONFIG_VERSION: u64 = 1;
 pub struct Config {
     pub animated: bool,
     pub refresh: u64,
+    pub audit_log: bool,
 }
 
 impl Default for Config {
@@ -27,6 +29,7 @@ impl Default for Config {
         Self {
             animated: true,
             refresh: 20,
+            audit_log: false,
         }
     }
 }

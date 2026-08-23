@@ -4,12 +4,14 @@ use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
 use std::{
     borrow::Cow,
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     path::PathBuf,
     rc::Rc,
     sync::{LazyLock, OnceLock},
     time::{Duration, Instant},
 };
+
+use jiff::Zoned;
 
 use cosmic::{
     Application, Apply, Element,
@@ -38,11 +40,12 @@ use pipewire::{channel::Sender as PwSender, context::ContextRc, main_loop::MainL
 
 use crate::{
     CONFIG_VERSION, Config,
+    audit::{self, DeviceKind},
     camera::{get_inotify, open_cameras, procs_using_camera},
 };
 
 static REC_ICON: LazyLock<crate::rec_icon::Id> = LazyLock::new(crate::rec_icon::Id::unique);
-static PW_SENDER: OnceLock<PwSender<u32>> = OnceLock::new();
+static PW_SENDER: OnceLock<PwSender<PwId>> = OnceLock::new();
 
 #[derive(Debug, Clone, Default)]
 pub struct AppInfo<'s> {
@@ -57,14 +60,29 @@ struct Shared {
     pub camera: bool,
 }
 
+type PwId = u32;
+type CamId = (PathBuf, u32); // pid: u32
+
+struct Share {
+    name: String,
+    start: Zoned,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CameraShares {
+    pub shares: i32,
+    pub min: i32,
+}
+
 #[derive(Default)]
 pub struct PrivacyIndicator {
     core: Core,
     timeline: Timeline,
     shared: Shared,
-    microphones: HashMap<u32, String>,
-    screenshares: HashMap<u32, String>,
-    cameras: HashMap<PathBuf, (i32, i32)>,
+    microphones: HashMap<PwId, Share>,
+    screenshares: HashMap<PwId, Share>,
+    cameras: HashMap<CamId, Share>,
+    camera_shares: HashMap<PathBuf, CameraShares>,
     popup: Option<PopupId>,
     config: Config,
 }
@@ -73,17 +91,17 @@ pub struct PrivacyIndicator {
 pub enum Message {
     Tick,
     RecTick(Instant),
-    ScreenShareAdd(u32, String),
-    MicrophoneAdd(u32, String),
-    PipeWireNodeRemove(u32),
+    ScreenShareAdd(PwId, String),
+    MicrophoneAdd(PwId, String),
+    PipeWireNodeRemove(PwId),
     CameraOpen(PathBuf),
     CameraClose(PathBuf),
-    CameraPrevious(HashMap<PathBuf, (i32, i32)>),
+    CameraPrevious(HashMap<PathBuf, CameraShares>),
     CameraReset(PathBuf),
-    DisconnectNode(u32),
+    DisconnectNode(PwId),
     TogglePopup,
     ClosePopup(PopupId),
-    KillProcess(u32),
+    KillProcess(u32), // PwId or pid
     Config(Config),
 }
 
@@ -205,21 +223,21 @@ impl Application for PrivacyIndicator {
         let microphones: Vec<_> = self
             .microphones
             .iter()
-            .map(|(&id, name)| AppInfo {
-                name: name.into(),
+            .map(|(&id, pws)| AppInfo {
+                name: (&pws.name).into(),
                 id,
             })
             .collect();
         let screenshares: Vec<_> = self
             .screenshares
             .iter()
-            .map(|(&id, name)| AppInfo {
-                name: name.into(),
+            .map(|(&id, pws)| AppInfo {
+                name: (&pws.name).into(),
                 id,
             })
             .collect();
         let cameras: Vec<_> = self
-            .cameras
+            .camera_shares
             .keys()
             .flat_map(|path| procs_using_camera(path))
             .collect();
@@ -263,6 +281,7 @@ impl Application for PrivacyIndicator {
             .into()
     }
 
+    #[allow(clippy::too_many_lines)]
     fn update(&mut self, message: Self::Message) -> Task<Self::Message> {
         match message {
             Message::Tick => {
@@ -270,42 +289,92 @@ impl Application for PrivacyIndicator {
                     microphone: !self.microphones.is_empty(),
                     screenshare: !self.screenshares.is_empty(),
                     camera: self
-                        .cameras
+                        .camera_shares
                         .values()
-                        .fold(0, |acc, (shares, min)| acc + shares - min)
+                        .fold(0, |acc, CameraShares { shares, min }| acc + shares - min)
                         > 0,
                 };
             }
             Message::CameraPrevious(cameras) => {
-                self.cameras = cameras;
+                self.camera_shares = cameras;
             }
             Message::CameraOpen(path) => {
-                self.cameras
+                let v = self
+                    .camera_shares
                     .entry(path.clone())
-                    .and_modify(|v| v.0 += 1)
-                    .or_insert((1, 0));
+                    .and_modify(|v| v.shares += 1)
+                    .or_insert(CameraShares { shares: 1, min: 0 });
+                let in_use = v.shares - v.min > 0;
+                if self.config.audit_log && in_use {
+                    for app in procs_using_camera(&path) {
+                        self.cameras.entry((path.clone(), app.id)).or_insert(Share {
+                            name: app.name.into_owned(),
+                            start: Zoned::now(),
+                        });
+                    }
+                }
             }
             Message::CameraClose(path) => {
-                self.cameras
-                    .entry(path.clone())
-                    .and_modify(|v| {
-                        v.0 -= 1;
-                        v.1 = v.1.min(v.0);
-                    })
-                    .or_insert((0, 0));
+                let shares = self.camera_shares.get_mut(&path).expect("unknown device");
+                shares.shares -= 1;
+                shares.min = shares.min.min(shares.shares);
+                let current: HashSet<u32> = procs_using_camera(&path)
+                    .into_iter()
+                    .map(|a| a.id)
+                    .collect();
+                self.cameras.retain(|(p, pid), Share { name, start }| {
+                    if p != &path {
+                        return true;
+                    }
+                    if current.contains(pid) {
+                        return true;
+                    }
+                    if self.config.audit_log {
+                        audit::record(DeviceKind::Camera, name, start, &Zoned::now());
+                    }
+                    false
+                });
             }
             Message::CameraReset(path) => {
-                self.cameras.remove(&path);
+                self.cameras.retain(|(p, _), Share { name, start }| {
+                    if p != &path {
+                        return true;
+                    }
+                    if self.config.audit_log {
+                        audit::record(DeviceKind::Camera, name, start, &Zoned::now());
+                    }
+                    false
+                });
+                self.camera_shares.remove(&path);
             }
             Message::ScreenShareAdd(id, info) => {
-                self.screenshares.insert(id, info);
+                self.screenshares.insert(
+                    id,
+                    Share {
+                        name: info,
+                        start: Zoned::now(),
+                    },
+                );
             }
             Message::MicrophoneAdd(id, info) => {
-                self.microphones.insert(id, info);
+                self.microphones.insert(
+                    id,
+                    Share {
+                        name: info,
+                        start: Zoned::now(),
+                    },
+                );
             }
             Message::PipeWireNodeRemove(id) => {
-                self.screenshares.remove(&id);
-                self.microphones.remove(&id);
+                if let Some(pw) = self.screenshares.remove(&id)
+                    && self.config.audit_log
+                {
+                    audit::record(DeviceKind::ScreenShare, &pw.name, &pw.start, &Zoned::now());
+                } else if let Some(pw) = self.microphones.remove(&id)
+                    && self.config.audit_log
+                {
+                    audit::record(DeviceKind::Microphone, &pw.name, &pw.start, &Zoned::now());
+                }
             }
             Message::RecTick(now) => {
                 self.timeline.now(now);

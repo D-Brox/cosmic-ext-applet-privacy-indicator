@@ -10,6 +10,7 @@ description = "Privacy indicator for the COSMIC Desktop"
 bimap = "0.6.3"
 cosmic-time = { git = "https://github.com/D-Brox/cosmic-time.git" }
 inotify = "0.11.0"
+jiff = "0.2"
 nix = { version = "0.31.3", features = ["signal"] }
 pipewire = "0.10.0"
 serde = "1.0.228"
