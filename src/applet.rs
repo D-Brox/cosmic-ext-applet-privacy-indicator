@@ -355,7 +355,7 @@ impl Application for PrivacyIndicator {
         let pw_shares = Self::pipewire_subscription();
         let camera_shares = Self::inotify_subscription();
         let config = Self::config_subscription();
-        let timeline = if self.config.animated {
+        let timeline = if self.should_animate() {
             cosmic::iced::time::every(Duration::from_millis(self.config.refresh))
                 .map(Message::RecTick)
         } else {
@@ -372,6 +372,11 @@ impl Application for PrivacyIndicator {
 }
 
 impl PrivacyIndicator {
+    fn should_animate(&self) -> bool {
+        self.config.animated
+            && (self.shared.microphone || self.shared.screenshare || self.shared.camera)
+    }
+
     pub fn config_subscription() -> Subscription<Message> {
         struct ConfigSubscription;
         cosmic_config::config_subscription(
@@ -533,5 +538,29 @@ impl PrivacyIndicator {
             })
         };
         Subscription::run(inotify)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn animation_runs_only_for_visible_indicators() {
+        let mut app = PrivacyIndicator::default();
+
+        assert!(!app.should_animate());
+
+        drop(app.update(Message::MicrophoneAdd(1, "Microphone".to_string())));
+        drop(app.update(Message::Tick));
+        assert!(app.should_animate());
+
+        app.config.animated = false;
+        assert!(!app.should_animate());
+
+        app.config.animated = true;
+        drop(app.update(Message::PipeWireNodeRemove(1)));
+        drop(app.update(Message::Tick));
+        assert!(!app.should_animate());
     }
 }
