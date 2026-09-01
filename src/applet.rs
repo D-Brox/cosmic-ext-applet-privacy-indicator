@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
+use cosmic::iced::futures::{SinkExt, executor::block_on};
 use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
 use std::{
@@ -20,7 +21,7 @@ use cosmic::{
     iced::{
         Alignment, Background, Border, Length, Subscription,
         core::layout::Limits,
-        futures::{SinkExt, channel::mpsc::Sender},
+        futures::channel::mpsc::Sender,
         stream::channel,
         window::{self, Id as PopupId},
     },
@@ -38,7 +39,7 @@ use pipewire::{channel::Sender as PwSender, context::ContextRc, main_loop::MainL
 
 use crate::{
     CONFIG_VERSION, Config,
-    camera::{get_inotify, open_cameras, procs_using_camera},
+    camera::{add_watch, get_inotify, open_cameras, procs_using_camera, remove_watch},
 };
 
 static REC_ICON: LazyLock<crate::rec_icon::Id> = LazyLock::new(crate::rec_icon::Id::unique);
@@ -338,7 +339,7 @@ impl Application for PrivacyIndicator {
             }
             Message::DisconnectNode(id) => {
                 if let Some(sender) = PW_SENDER.get() {
-                    let _ = sender.send(id);
+                    _ = sender.send(id);
                 }
             }
             Message::KillProcess(pid) => {
@@ -398,7 +399,6 @@ impl PrivacyIndicator {
     fn pipewire_subscription() -> Subscription<Message> {
         let pw = || {
             channel(100, |output: Sender<_>| async {
-                let handle = tokio::runtime::Handle::current();
                 std::thread::spawn(move || {
                     pipewire::init();
                     let main_loop =
@@ -413,7 +413,7 @@ impl PrivacyIndicator {
                         .expect("Failed to get PipeWire registry");
 
                     let (sender, receiver) = pipewire::channel::channel::<u32>();
-                    let _ = PW_SENDER.set(sender);
+                    _ = PW_SENDER.set(sender);
 
                     let receiver_registry = registry.clone();
                     let _attached = receiver.attach(main_loop.loop_(), move |id| {
@@ -421,7 +421,6 @@ impl PrivacyIndicator {
                     });
 
                     let output_remove = output.clone();
-                    let handle_remove = handle.clone();
                     let _listener = registry
                         .add_listener_local()
                         .global(move |global| {
@@ -446,18 +445,18 @@ impl PrivacyIndicator {
                                 }
                                 _ => None,
                             };
-                            if let Some(msg) = msg {
-                                let mut output = output.clone();
-                                handle.spawn(async move {
-                                    let _ = output.send(msg).await;
-                                });
+                            if let Some(msg) = msg
+                                && let Err(e) = block_on(output.clone().send(msg))
+                            {
+                                eprintln!("Failed to send PipeWire event: {e}");
                             }
                         })
                         .global_remove(move |id| {
-                            let mut output = output_remove.clone();
-                            handle_remove.spawn(async move {
-                                let _ = output.send(Message::PipeWireNodeRemove(id)).await;
-                            });
+                            if let Err(e) = block_on(
+                                output_remove.clone().send(Message::PipeWireNodeRemove(id)),
+                            ) {
+                                eprintln!("Failed to send PipeWire unshare event: {e}");
+                            }
                         })
                         .register();
                     main_loop.run();
@@ -470,13 +469,11 @@ impl PrivacyIndicator {
     fn inotify_subscription() -> Subscription<Message> {
         let inotify = || {
             channel(100, |output: Sender<_>| async {
-                let handle = tokio::runtime::Handle::current();
                 std::thread::spawn(move || {
+                    if let Err(e) =
+                        block_on(output.clone().send(Message::CameraPrevious(open_cameras())))
                     {
-                        let mut output = output.clone();
-                        handle.spawn(async move {
-                            let _ = output.send(Message::CameraPrevious(open_cameras())).await;
-                        });
+                        eprintln!("Failed to send previously open camera event: {e}");
                     }
                     let (mut inotify, mut wd_path) = get_inotify();
                     let mut event_buffer = [0; 4096];
@@ -487,47 +484,41 @@ impl PrivacyIndicator {
                             .expect("Failed to read events")
                         {
                             match event.mask {
-                                EventMask::CREATE | EventMask::ATTRIB | EventMask::DELETE_SELF
-                                    if (event.mask == EventMask::DELETE_SELF
-                                        || event
-                                            .name
-                                            .unwrap_or_default()
-                                            .to_string_lossy()
-                                            .starts_with("video")) =>
-                                {
-                                    let old_wd_paths = wd_path;
-                                    (inotify, wd_path) = get_inotify();
-                                    let old_paths = old_wd_paths
-                                        .left_values()
-                                        .collect::<std::collections::HashSet<_>>();
-                                    let new_paths = wd_path
-                                        .left_values()
-                                        .collect::<std::collections::HashSet<_>>();
-                                    for &path in old_paths.difference(&new_paths) {
-                                        let mut output = output.clone();
-                                        let path = path.clone();
-                                        handle.spawn(async move {
-                                            let _ = output.send(Message::CameraReset(path)).await;
-                                        });
+                                EventMask::CREATE | EventMask::ATTRIB => {
+                                    if let Some(name) = event.name
+                                        && name.to_string_lossy().starts_with("video")
+                                    {
+                                        let path = PathBuf::from("/dev").join(name);
+                                        add_watch(&inotify, &mut wd_path, path);
+                                    }
+                                }
+                                EventMask::DELETE_SELF => {
+                                    if let Some(path) = wd_path.get_by_right(&event.wd).cloned() {
+                                        remove_watch(&inotify, &mut wd_path, event.wd);
+                                        if let Err(e) = block_on(
+                                            output.clone().send(Message::CameraReset(path)),
+                                        ) {
+                                            eprintln!("Failed to send camera reset event: {e}");
+                                        }
                                     }
                                 }
                                 EventMask::OPEN => {
-                                    if let Some(path) = wd_path.get_by_right(&event.wd) {
-                                        let mut output = output.clone();
-                                        let path = path.clone();
-                                        handle.spawn(async move {
-                                            let _ = output.send(Message::CameraOpen(path)).await;
-                                        });
+                                    if let Some(path) = wd_path.get_by_right(&event.wd)
+                                        && let Err(e) = block_on(
+                                            output.clone().send(Message::CameraOpen(path.clone())),
+                                        )
+                                    {
+                                        eprintln!("Failed to send camera open event: {e}");
                                     }
                                 }
 
                                 EventMask::CLOSE_WRITE | EventMask::CLOSE_NOWRITE => {
-                                    if let Some(path) = wd_path.get_by_right(&event.wd) {
-                                        let mut output = output.clone();
-                                        let path = path.clone();
-                                        handle.spawn(async move {
-                                            let _ = output.send(Message::CameraClose(path)).await;
-                                        });
+                                    if let Some(path) = wd_path.get_by_right(&event.wd)
+                                        && let Err(e) = block_on(
+                                            output.clone().send(Message::CameraClose(path.clone())),
+                                        )
+                                    {
+                                        eprintln!("Failed to send camera close event: {e}");
                                     }
                                 }
                                 _ => {}

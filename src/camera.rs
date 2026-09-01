@@ -94,15 +94,38 @@ pub fn get_inotify() -> (Inotify, BiHashMap<PathBuf, WatchDescriptor>) {
     for entry in std::fs::read_dir("/dev").expect("Failed to read /dev") {
         if let Ok(entry) = entry
             && entry.file_name().to_string_lossy().starts_with("video")
-        {
-            let Ok(wd) = inotify.watches().add(
+            && !wd_path.contains_left(&entry.path())
+            && let Ok(wd) = inotify.watches().add(
                 entry.path(),
                 WatchMask::OPEN | WatchMask::CLOSE | WatchMask::DELETE_SELF,
-            ) else {
-                continue;
-            };
+            )
+        {
             wd_path.insert(entry.path(), wd);
         }
     }
     (inotify, wd_path)
+}
+
+pub fn add_watch(
+    inotify: &Inotify,
+    wd_path: &mut BiHashMap<PathBuf, WatchDescriptor>,
+    path: PathBuf,
+) {
+    if !wd_path.contains_left(&path)
+        && let Ok(wd) = inotify.watches().add(
+            &path,
+            WatchMask::OPEN | WatchMask::CLOSE | WatchMask::DELETE_SELF,
+        )
+    {
+        wd_path.insert(path, wd);
+    }
+}
+
+pub fn remove_watch(
+    inotify: &Inotify,
+    wd_path: &mut BiHashMap<PathBuf, WatchDescriptor>,
+    wd: WatchDescriptor,
+) {
+    _ = wd_path.remove_by_right(&wd);
+    _ = inotify.watches().remove(wd);
 }

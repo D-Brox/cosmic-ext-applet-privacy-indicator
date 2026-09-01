@@ -1,6 +1,6 @@
 [package]
 name = "cosmic-ext-applet-privacy-indicator"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2024"
 authors = ["D-Brox <davidfbg00@gmail.com>"]
 license = "GPL-3.0-only"
@@ -9,10 +9,10 @@ description = "Privacy indicator for the COSMIC Desktop"
 [dependencies]
 bimap = "0.6.3"
 cosmic-time = { git = "https://github.com/D-Brox/cosmic-time.git" }
-inotify = "0.11.0"
+inotify = "0.11.5"
 nix = { version = "0.31.3", features = ["signal"] }
-pipewire = "0.10.0"
-serde = "1.0.228"
+pipewire = "0.10.1"
+serde = "1"
 tokio = { version = "1", default-features = false, features = ["rt"] }
 # zbus = { version = "5", default-features = false, features = ["blocking-api"] }
 
