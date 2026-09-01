@@ -17,7 +17,6 @@ use cosmic::{
     app::{self, Core, Task},
     applet::padded_control,
     cosmic_config,
-    cosmic_theme::palette::WithAlpha,
     iced::{
         Alignment, Background, Border, Length, Subscription,
         core::layout::Limits,
@@ -172,9 +171,7 @@ impl Application for PrivacyIndicator {
         let container_style = |theme: &Theme| {
             let cosmic = theme.cosmic();
             CtnStyle {
-                background: Some(Background::Color(
-                    cosmic.primary(false).base.with_alpha(0.5).into(),
-                )),
+                background: Some(Background::Color(cosmic.primary(true).base.into())),
                 border: Border {
                     radius: cosmic.corner_radii.radius_xl.into(),
                     ..Default::default()
