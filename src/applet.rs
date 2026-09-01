@@ -20,7 +20,7 @@ use cosmic::{
     iced::{
         Alignment, Background, Border, Length, Subscription,
         core::layout::Limits,
-        futures::{SinkExt, channel::mpsc::Sender},
+        futures::{SinkExt, channel::mpsc::Sender, executor::block_on},
         stream::channel,
         window::{self, Id as PopupId},
     },
@@ -38,7 +38,7 @@ use pipewire::{channel::Sender as PwSender, context::ContextRc, main_loop::MainL
 
 use crate::{
     CONFIG_VERSION, Config,
-    camera::{get_inotify, open_cameras, procs_using_camera},
+    camera::{get_inotify, open_cameras, proc_scan_available, procs_using_camera},
 };
 
 static REC_ICON: LazyLock<crate::rec_icon::Id> = LazyLock::new(crate::rec_icon::Id::unique);
@@ -64,7 +64,7 @@ pub struct PrivacyIndicator {
     shared: Shared,
     microphones: HashMap<u32, String>,
     screenshares: HashMap<u32, String>,
-    cameras: HashMap<PathBuf, (i32, i32)>,
+    cameras: HashMap<PathBuf, u32>,
     popup: Option<PopupId>,
     config: Config,
 }
@@ -78,7 +78,7 @@ pub enum Message {
     PipeWireNodeRemove(u32),
     CameraOpen(PathBuf),
     CameraClose(PathBuf),
-    CameraPrevious(HashMap<PathBuf, (i32, i32)>),
+    CameraPrevious(HashMap<PathBuf, u32>),
     CameraReset(PathBuf),
     DisconnectNode(u32),
     TogglePopup,
@@ -269,30 +269,33 @@ impl Application for PrivacyIndicator {
                 self.shared = Shared {
                     microphone: !self.microphones.is_empty(),
                     screenshare: !self.screenshares.is_empty(),
-                    camera: self
-                        .cameras
-                        .values()
-                        .fold(0, |acc, (shares, min)| acc + shares - min)
-                        > 0,
+                    camera: self.cameras.values().any(|&fds| fds > 0),
                 };
+                // The inotify counters drift whenever an open or close event is missed, which
+                // leaves the indicator stuck on. Re-check `/proc` while a camera looks busy so
+                // the state converges back to what is actually open.
+                if !self.cameras.is_empty() && proc_scan_available() {
+                    return cosmic::task::future(async {
+                        let cameras = tokio::task::spawn_blocking(open_cameras)
+                            .await
+                            .unwrap_or_default();
+                        Message::CameraPrevious(cameras)
+                    });
+                }
             }
             Message::CameraPrevious(cameras) => {
                 self.cameras = cameras;
             }
             Message::CameraOpen(path) => {
-                self.cameras
-                    .entry(path.clone())
-                    .and_modify(|v| v.0 += 1)
-                    .or_insert((1, 0));
+                *self.cameras.entry(path).or_default() += 1;
             }
             Message::CameraClose(path) => {
-                self.cameras
-                    .entry(path.clone())
-                    .and_modify(|v| {
-                        v.0 -= 1;
-                        v.1 = v.1.min(v.0);
-                    })
-                    .or_insert((0, 0));
+                if let Some(fds) = self.cameras.get_mut(&path) {
+                    *fds = fds.saturating_sub(1);
+                    if *fds == 0 {
+                        self.cameras.remove(&path);
+                    }
+                }
             }
             Message::CameraReset(path) => {
                 self.cameras.remove(&path);
@@ -470,15 +473,21 @@ impl PrivacyIndicator {
     fn inotify_subscription() -> Subscription<Message> {
         let inotify = || {
             channel(100, |output: Sender<_>| async {
-                let handle = tokio::runtime::Handle::current();
                 std::thread::spawn(move || {
-                    {
+                    // Each event has to reach the applet in the order it was read, otherwise
+                    // an open/close pair can be applied backwards and corrupt the counters.
+                    let send = |msg| {
                         let mut output = output.clone();
-                        handle.spawn(async move {
-                            let _ = output.send(Message::CameraPrevious(open_cameras())).await;
+                        block_on(async move {
+                            let _ = output.send(msg).await;
                         });
-                    }
+                    };
+
+                    // Watch first, then scan: a camera opened in between would otherwise be
+                    // missed by both the scan and the watches.
                     let (mut inotify, mut wd_path) = get_inotify();
+                    send(Message::CameraPrevious(open_cameras()));
+
                     let mut event_buffer = [0; 4096];
 
                     loop {
@@ -486,51 +495,47 @@ impl PrivacyIndicator {
                             .read_events_blocking(&mut event_buffer)
                             .expect("Failed to read events")
                         {
-                            match event.mask {
-                                EventMask::CREATE | EventMask::ATTRIB | EventMask::DELETE_SELF
-                                    if (event.mask == EventMask::DELETE_SELF
-                                        || event
-                                            .name
-                                            .unwrap_or_default()
-                                            .to_string_lossy()
-                                            .starts_with("video")) =>
-                                {
-                                    let old_wd_paths = wd_path;
-                                    (inotify, wd_path) = get_inotify();
-                                    let old_paths = old_wd_paths
-                                        .left_values()
-                                        .collect::<std::collections::HashSet<_>>();
-                                    let new_paths = wd_path
-                                        .left_values()
-                                        .collect::<std::collections::HashSet<_>>();
-                                    for &path in old_paths.difference(&new_paths) {
-                                        let mut output = output.clone();
-                                        let path = path.clone();
-                                        handle.spawn(async move {
-                                            let _ = output.send(Message::CameraReset(path)).await;
-                                        });
-                                    }
-                                }
-                                EventMask::OPEN => {
-                                    if let Some(path) = wd_path.get_by_right(&event.wd) {
-                                        let mut output = output.clone();
-                                        let path = path.clone();
-                                        handle.spawn(async move {
-                                            let _ = output.send(Message::CameraOpen(path)).await;
-                                        });
-                                    }
-                                }
+                            let mask = event.mask;
+                            let device_name = || {
+                                event
+                                    .name
+                                    .unwrap_or_default()
+                                    .to_string_lossy()
+                                    .starts_with("video")
+                            };
 
-                                EventMask::CLOSE_WRITE | EventMask::CLOSE_NOWRITE => {
-                                    if let Some(path) = wd_path.get_by_right(&event.wd) {
-                                        let mut output = output.clone();
-                                        let path = path.clone();
-                                        handle.spawn(async move {
-                                            let _ = output.send(Message::CameraClose(path)).await;
-                                        });
-                                    }
+                            if mask.contains(EventMask::DELETE_SELF)
+                                || ((mask.intersects(EventMask::CREATE | EventMask::ATTRIB))
+                                    && device_name())
+                            {
+                                let old_wd_paths = wd_path;
+                                (inotify, wd_path) = get_inotify();
+                                let old_paths = old_wd_paths
+                                    .left_values()
+                                    .collect::<std::collections::HashSet<_>>();
+                                let new_paths = wd_path
+                                    .left_values()
+                                    .collect::<std::collections::HashSet<_>>();
+                                for &path in old_paths.difference(&new_paths) {
+                                    send(Message::CameraReset(path.clone()));
                                 }
-                                _ => {}
+                                // Re-watching drops whatever was still queued on the old
+                                // instance, so the counters are rebuilt from `/proc` instead.
+                                if proc_scan_available() {
+                                    send(Message::CameraPrevious(open_cameras()));
+                                }
+                                break;
+                            }
+
+                            if mask.contains(EventMask::OPEN) {
+                                if let Some(path) = wd_path.get_by_right(&event.wd) {
+                                    send(Message::CameraOpen(path.clone()));
+                                }
+                            } else if mask
+                                .intersects(EventMask::CLOSE_WRITE | EventMask::CLOSE_NOWRITE)
+                                && let Some(path) = wd_path.get_by_right(&event.wd)
+                            {
+                                send(Message::CameraClose(path.clone()));
                             }
                         }
                     }
@@ -544,6 +549,44 @@ impl PrivacyIndicator {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn camera_close_without_matching_open_does_not_stick() {
+        let mut app = PrivacyIndicator::default();
+        let device = PathBuf::from("/dev/video0");
+
+        drop(app.update(Message::CameraOpen(device.clone())));
+        drop(app.update(Message::Tick));
+        assert!(app.shared.camera);
+
+        // A close for an open that was never seen must not push the count below zero,
+        // otherwise the next open would leave the indicator permanently on.
+        drop(app.update(Message::CameraClose(device.clone())));
+        drop(app.update(Message::CameraClose(device.clone())));
+        drop(app.update(Message::Tick));
+        assert!(!app.shared.camera);
+        assert!(app.cameras.is_empty());
+
+        drop(app.update(Message::CameraOpen(device.clone())));
+        drop(app.update(Message::CameraClose(device)));
+        drop(app.update(Message::Tick));
+        assert!(!app.shared.camera);
+    }
+
+    #[test]
+    fn proc_scan_overrides_stale_camera_counters() {
+        let mut app = PrivacyIndicator::default();
+        let device = PathBuf::from("/dev/video0");
+
+        drop(app.update(Message::CameraOpen(device)));
+        drop(app.update(Message::Tick));
+        assert!(app.shared.camera);
+
+        // A rescan reporting nothing open clears the leaked count.
+        drop(app.update(Message::CameraPrevious(HashMap::new())));
+        drop(app.update(Message::Tick));
+        assert!(!app.shared.camera);
+    }
 
     #[test]
     fn animation_runs_only_for_visible_indicators() {

@@ -9,8 +9,18 @@ use inotify::{Inotify, WatchDescriptor, WatchMask};
 
 use crate::applet::AppInfo;
 
-pub fn open_cameras() -> HashMap<PathBuf, (i32, i32)> {
-    if std::path::Path::new("/.flatpak-info").exists() {
+/// Whether `/proc` exposes the file descriptors of the processes that may use a camera.
+///
+/// Inside a flatpak sandbox `/proc` only contains the applet itself, so scanning it says
+/// nothing about the rest of the system and the inotify counters are the only source of truth.
+pub fn proc_scan_available() -> bool {
+    !Path::new("/.flatpak-info").exists()
+}
+
+/// Scans `/proc` for every open file descriptor on a `/dev/video*` device, returning the
+/// number of descriptors held per device.
+pub fn open_cameras() -> HashMap<PathBuf, u32> {
+    if !proc_scan_available() {
         return HashMap::new();
     }
 
@@ -40,8 +50,8 @@ pub fn open_cameras() -> HashMap<PathBuf, (i32, i32)> {
                         None
                     }
                 })
-                .fold(HashMap::<PathBuf, (i32, i32)>::new(), |mut hm, p| {
-                    hm.entry(p).and_modify(|fds| fds.0 += 1).or_insert((1, 0));
+                .fold(HashMap::<PathBuf, u32>::new(), |mut hm, p| {
+                    *hm.entry(p).or_default() += 1;
                     hm
                 })
         })
@@ -50,7 +60,7 @@ pub fn open_cameras() -> HashMap<PathBuf, (i32, i32)> {
 
 /// Scans /proc to find all processes currently holding a file descriptor open on `device`.
 pub fn procs_using_camera(device: &Path) -> Vec<AppInfo<'_>> {
-    if std::path::Path::new("/.flatpak-info").exists() {
+    if !proc_scan_available() {
         return vec![];
     }
     let mut seen_pids = HashSet::new();
