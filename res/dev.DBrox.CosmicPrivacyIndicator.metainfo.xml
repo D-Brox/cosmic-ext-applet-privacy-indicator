@@ -16,13 +16,17 @@
   <content_rating type="oars-1.1" />
   <name>Privacy Indicator</name>
   <name xml:lang="cs">Indikátor soukromí</name>
+  <name xml:lang="pl">Sygnalizator Prywatności</name>
   <summary>Privacy applet for indicating when the microphone, camera or screen are being shared</summary>
   <summary xml:lang="cs">Applet pro ochranu soukromí, který vás upozorní, kdykoli je sdílena kamera, mikrofon nebo obrazovka</summary>
+  <summary xml:lang="pl">Aplet chroniący prywatność, który sygnalizuje że mikrofon, kamera lub ekran są współdzielone</summary>
   <description>
     <p>Privacy applet for indicating when the microphone, camera or screen are being shared.</p>
     <p xml:lang="cs">Applet pro ochranu soukromí, který vás upozorní, kdykoli je sdílena kamera, mikrofon nebo obrazovka.</p>
+    <p xml:lang="pl">Aplet chroniący prywatność, który sygnalizuje że mikrofon, kamera lub ekran są współdzielone.</p>
     <p>The Flatpak version is unable to detect camera shares from before the applet was launched.</p>
     <p xml:lang="cs">Flatpak verze nedokáže detekovat sdílení kamery, které bylo zahájeno před spuštěním appletu.</p>
+    <p xml:lang="pl">Wersja z Flatpaka nie jest w stanie wykryć współdzielenie kamery, jeśli było aktywne zanim aplet został uruchomiony.</p>
   </description>
   <launchable type="desktop-id">dev.DBrox.CosmicPrivacyIndicator.desktop</launchable>
   <icon type="stock">dev.DBrox.CosmicPrivacyIndicator.svg</icon>
@@ -31,6 +35,7 @@
       <image>https://github.com/D-Brox/cosmic-ext-applet-privacy-indicator/raw/master/res/screenshot.png</image>
       <caption>Indicator with all shares active</caption>
       <caption xml:lang="cs">Indikátor ve stavu, kdy jsou všechna sdílení aktivní</caption>
+      <caption xml:lang="pl">Sygnalizator z wykrytymi wszystkimi typami współdzielenia</caption>
     </screenshot>
   </screenshots>
   <categories>
