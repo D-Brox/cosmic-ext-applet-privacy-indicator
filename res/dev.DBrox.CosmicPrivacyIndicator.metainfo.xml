@@ -48,6 +48,12 @@
     </binary>
   </provides>
   <releases>
+  <release version="0.3.1" date="2026-09-12">
+    <url type="details">https://github.com/D-Brox/cosmic-ext-applet-system-monitor/releases/tag/v0.3.1</url>
+    <description>
+      <p>Fix frosted glass rendering. Stop idle animation ticks when no indicator is visible. Remove busy-loops in subscriptions. Updated deps.</p>
+    </description>
+  </release>
   <release version="0.3.0" date="2026-05-27">
     <url type="details">https://github.com/D-Brox/cosmic-ext-applet-system-monitor/releases/tag/v0.3.0</url>
     <description>
