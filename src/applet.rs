@@ -314,9 +314,13 @@ impl Application for PrivacyIndicator {
                 }
             }
             Message::CameraClose(path) => {
-                let shares = self.camera_shares.get_mut(&path).expect("unknown device");
-                shares.shares -= 1;
-                shares.min = shares.min.min(shares.shares);
+                self.camera_shares
+                    .entry(path.clone())
+                    .and_modify(|v| {
+                        v.shares -= 1;
+                        v.min = v.min.min(v.shares);
+                    })
+                    .or_insert(CameraShares { shares: 0, min: 0 });
                 let current: HashSet<u32> = procs_using_camera(&path)
                     .into_iter()
                     .map(|a| a.id)
