@@ -415,6 +415,15 @@ impl Application for PrivacyIndicator {
             }
             Message::Config(config) => self.config = config,
         }
+
+        if self.popup.is_some()
+            && self.microphones.is_empty()
+            && self.screenshares.is_empty()
+            && self.camera_shares.values().all(|cs| cs.shares <= 0)
+            && let Some(id) = self.popup.take()
+        {
+            return destroy_popup(id).apply(surface_task);
+        }
         Task::none()
     }
 
