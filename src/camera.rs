@@ -50,9 +50,17 @@ pub fn open_cameras() -> HashMap<PathBuf, CameraShares> {
         .unwrap_or_default()
 }
 
+// One does not simply kill the entire audio stack
+pub fn is_camera_daemon(name: &str) -> bool {
+    name.starts_with("pipewire")
+        || name.starts_with("wireplumber")
+        || name.starts_with("xdg-desktop-")
+        || name.starts_with("flatpak-portal")
+}
+
 /// Scans /proc to find all processes currently holding a file descriptor open on `device`.
 /// This is CPU intensive. **DO NOT** use in the applet main view.
-pub fn procs_using_camera(device: &Path) -> Vec<AppInfo<'_>> {
+pub fn procs_using_camera(device: &Path) -> Vec<AppInfo<'static>> {
     if std::path::Path::new("/.flatpak-info").exists() {
         return vec![];
     }

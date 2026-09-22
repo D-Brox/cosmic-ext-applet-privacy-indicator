@@ -42,7 +42,9 @@ use pipewire::{channel::Sender as PwSender, context::ContextRc, main_loop::MainL
 use crate::{
     CONFIG_VERSION, Config,
     audit::{self, DeviceKind},
-    camera::{add_watch, get_inotify, open_cameras, procs_using_camera, remove_watch},
+    camera::{
+        add_watch, get_inotify, is_camera_daemon, open_cameras, procs_using_camera, remove_watch,
+    },
 };
 
 static REC_ICON: LazyLock<crate::rec_icon::Id> = LazyLock::new(crate::rec_icon::Id::unique);
@@ -84,6 +86,7 @@ pub struct PrivacyIndicator {
     screenshares: HashMap<PwId, Share>,
     cameras: HashMap<CamId, Share>,
     camera_shares: HashMap<PathBuf, CameraShares>,
+    camera_procs: HashMap<PathBuf, Vec<AppInfo<'static>>>,
     popup: Option<PopupId>,
     config: Config,
 }
@@ -235,32 +238,29 @@ impl Application for PrivacyIndicator {
                 id,
             })
             .collect();
-        let cameras: Vec<_> = self
-            .camera_shares
-            .keys()
-            .flat_map(|path| procs_using_camera(path))
-            .collect();
+        let (daemons, cameras): (Vec<_>, Vec<_>) = self
+            .camera_procs
+            .values()
+            .flatten()
+            .partition(|app| is_camera_daemon(&app.name));
 
         let mut rows: Vec<Element<Self::Message>> = vec![];
-
         macro_rules! section {
-            ($label:expr, $apps:expr, $id:ident) => {
+            ($label:expr, $apps:expr $(, $btn_label:expr, $id:ident)?) => {
                 if !$apps.is_empty() {
                     if !rows.is_empty() {
                         rows.push(divider::horizontal::default().into());
                     }
                     rows.push(padded_control(text::heading($label)).into());
                     for app in $apps {
-                        let kill_btn = button::destructive("Kill").on_press_maybe(if app.id > 0 {
-                            Some(Message::$id(app.id))
-                        } else {
-                            None
-                        });
                         rows.push(
                             padded_control(
                                 Row::new()
                                     .push(text::body(app.name.to_string()).width(Length::Fill))
-                                    .push(kill_btn)
+                                    $(
+                                    .push(button::destructive($btn_label)
+                                        .on_press_maybe((app.id > 0).then_some(Message::$id(app.id)))
+                                    ))?
                                     .align_y(Alignment::Center),
                             )
                             .into(),
@@ -270,9 +270,10 @@ impl Application for PrivacyIndicator {
             };
         }
 
-        section!("Camera", cameras, KillProcess);
-        section!("Microphone", microphones, DisconnectNode);
-        section!("Screen Share", screenshares, DisconnectNode);
+        section!("Camera", cameras, "Kill", KillProcess);
+        section!("Camera (System)", daemons);
+        section!("Microphone", microphones, "Disconnect", DisconnectNode);
+        section!("Screen Share", screenshares, "Disconnect", DisconnectNode);
 
         self.core
             .applet
@@ -296,6 +297,7 @@ impl Application for PrivacyIndicator {
             }
             Message::CameraPrevious(cameras) => {
                 self.camera_shares = cameras;
+                self.refresh_camera_procs();
             }
             Message::CameraOpen(path) => {
                 let v = self
@@ -304,23 +306,22 @@ impl Application for PrivacyIndicator {
                     .and_modify(|v| v.shares += 1)
                     .or_insert(CameraShares { shares: 1, min: 0 });
                 let in_use = v.shares - v.min > 0;
+                let current = procs_using_camera(&path);
                 if self.config.audit_log && in_use {
-                    for app in procs_using_camera(&path) {
+                    for app in &current {
                         self.cameras.entry((path.clone(), app.id)).or_insert(Share {
-                            name: app.name.into_owned(),
+                            name: app.name.to_string(),
                             start: Zoned::now(),
                         });
                     }
                 }
+                self.camera_procs.insert(path, current);
             }
             Message::CameraClose(path) => {
-                self.camera_shares
-                    .entry(path.clone())
-                    .and_modify(|v| {
-                        v.shares -= 1;
-                        v.min = v.min.min(v.shares);
-                    })
-                    .or_insert(CameraShares { shares: 0, min: 0 });
+                self.camera_shares.entry(path.clone()).and_modify(|v| {
+                    v.shares -= 1;
+                    v.min = v.min.min(v.shares);
+                });
                 let current: HashSet<u32> = procs_using_camera(&path)
                     .into_iter()
                     .map(|a| a.id)
@@ -337,6 +338,9 @@ impl Application for PrivacyIndicator {
                     }
                     false
                 });
+                self.camera_procs
+                    .entry(path)
+                    .and_modify(|v| v.retain(|AppInfo { id, .. }| current.contains(id)));
             }
             Message::CameraReset(path) => {
                 self.cameras.retain(|(p, _), Share { name, start }| {
@@ -349,6 +353,7 @@ impl Application for PrivacyIndicator {
                     false
                 });
                 self.camera_shares.remove(&path);
+                self.camera_procs.remove(&path);
             }
             Message::ScreenShareAdd(id, info) => {
                 self.screenshares.insert(
@@ -386,6 +391,7 @@ impl Application for PrivacyIndicator {
                 if let Some(id) = self.popup.take() {
                     return destroy_popup(id).apply(surface_task);
                 }
+                self.refresh_camera_procs();
                 let live_settings = |state: &mut PrivacyIndicator| {
                     let new_id = window::Id::unique();
                     state.popup = Some(new_id);
@@ -412,6 +418,7 @@ impl Application for PrivacyIndicator {
                 if let Err(e) = kill(Pid::from_raw(pid.cast_signed()), Signal::SIGTERM) {
                     println!("Failed to kill process {pid}: {e}");
                 }
+                self.refresh_camera_procs();
             }
             Message::Config(config) => self.config = config,
         }
@@ -451,6 +458,14 @@ impl PrivacyIndicator {
     fn should_animate(&self) -> bool {
         self.config.animated
             && (self.shared.microphone || self.shared.screenshare || self.shared.camera)
+    }
+
+    fn refresh_camera_procs(&mut self) {
+        self.camera_procs = self
+            .camera_shares
+            .keys()
+            .map(|path| (path.clone(), procs_using_camera(path)))
+            .collect();
     }
 
     pub fn config_subscription() -> Subscription<Message> {
