@@ -48,6 +48,12 @@
     </binary>
   </provides>
   <releases>
+  <release version="0.4.0" date="2026-09-21">
+    <url type="details">https://github.com/D-Brox/cosmic-ext-applet-privacy-indicator/releases/tag/v0.4.0</url>
+    <description>
+      <p>Add opt-in local audit event log. Cache camera processes to reduce /proc scans. Don't kill daemons. Close popup automatically when no shares remain. Updated deps.</p>
+    </description>
+  </release>
   <release version="0.3.1" date="2026-09-12">
     <url type="details">https://github.com/D-Brox/cosmic-ext-applet-system-monitor/releases/tag/v0.3.1</url>
     <description>

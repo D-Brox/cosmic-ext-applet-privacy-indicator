@@ -40,3 +40,6 @@ run-logs *args:
 spellcheck *args:
 	@codespell --skip="./i18n" --skip="./.git" --skip="./target" --builtin clear,rare,informal,code --ignore-words-list mut,crate {{args}}
 	@echo Spellings look good!
+
+update-sources:
+    uv run ../flatpak-cargo-generator.py Cargo.lock -o res/generated-sources.json
