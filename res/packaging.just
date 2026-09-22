@@ -79,6 +79,11 @@ install-rpm:
     dnf install ./target/generate-rpm/*.rpm
 
 
+# Builds flatpak
+[no-cd]
+build-flatpak:
+    cd res && flatpak-builder --force-clean builddir --repo repo dev.DBrox.CosmicPrivacyIndicator.json  --install-deps-from flathub
+
 # Compiles release profile with vendored dependencies
 build-vendored *args: vendor-extract (build-release '--frozen --offline' args)
 

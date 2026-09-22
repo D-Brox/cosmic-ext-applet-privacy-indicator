@@ -5,7 +5,7 @@
   "sdk": "org.freedesktop.Sdk",
   "sdk-extensions": [
     "org.freedesktop.Sdk.Extension.rust-stable",
-    "org.freedesktop.Sdk.Extension.llvm21"
+    "org.freedesktop.Sdk.Extension.llvm22"
   ],
   "base": "com.system76.Cosmic.BaseApp",
   "base-version": "stable",
@@ -21,8 +21,8 @@
     "--talk-name=com.system76.CosmicSettingsDaemon"
   ],
   "build-options": {
-    "append-path": "/usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/llvm21/bin",
-    "prepend-ld-library-path": "/usr/lib/sdk/llvm21/lib",
+    "append-path": "/usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/llvm22/bin",
+    "prepend-ld-library-path": "/usr/lib/sdk/llvm22/lib",
     "env": {
       "CARGO_HOME": "/run/build/cosmic-ext-applet-privacy-indicator/cargo"
     }
@@ -44,8 +44,8 @@
         {
           "type": "git",
           "url": "https://github.com/pipewire/pipewire.git",
-          "tag": "1.5.85",
-          "commit": "0a27618cd4f43017c8e2aa7b68172e64ba48eb23"
+          "tag": "1.6.9",
+          "commit": "8fa27cabdc6c0c1350c69c026af5850ef0af1e26"
         }
       ]
     },
@@ -64,7 +64,7 @@
         {
           "type": "git",
           "url": "https://github.com/D-Brox/cosmic-ext-applet-privacy-indicator.git",
-          "commit": "c3f2c7bafc183093709d4d3da8e169861a051d49"
+          "commit": "4d36b888771d2d4b4c5716d81f92cb6d8f778a63"
         },
         "generated-sources.json"
       ]
